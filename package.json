@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && timeout 60 npx prisma migrate deploy && next build",
+    "build": "prisma generate && node scripts/check-migrate-env.mjs && timeout 90 npx prisma migrate deploy && next build",
     "start": "next start",
     "lint": "eslint",
     "s3:create-bucket": "node scripts/create-s3-bucket.mjs"
