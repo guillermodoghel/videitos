@@ -1,6 +1,6 @@
 # Run Prisma migrations against the production database.
-# Requires GitHub secrets: POSTGRES_PRISMA_URL, POSTGRES_URL_NON_POOLING
-# (Use the same values as in Vercel → Environment Variables; POSTGRES_URL_NON_POOLING = direct connection, port 5432)
+# Uses non-pooling URL only to avoid connection timeouts in CI.
+# Requires GitHub secret: POSTGRES_URL_NON_POOLING (direct connection, port 5432; copy from Vercel/Supabase)
 
 name: Prisma migrate
 
@@ -8,10 +8,6 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - "prisma/**"
-      - "package.json"
-      - "package-lock.json"
 
 jobs:
   migrate:
@@ -31,6 +27,6 @@ jobs:
 
       - name: Run migrations
         env:
-          POSTGRES_PRISMA_URL: ${{ secrets.POSTGRES_PRISMA_URL }}
+          POSTGRES_PRISMA_URL: ${{ secrets.POSTGRES_URL_NON_POOLING }}
           POSTGRES_URL_NON_POOLING: ${{ secrets.POSTGRES_URL_NON_POOLING }}
         run: npx prisma migrate deploy
