@@ -20,19 +20,13 @@ export default async function DashboardLayout({
               href="/dashboard"
               className="text-sm font-medium text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
             >
-              Home
+              Jobs
             </Link>
             <Link
               href="/dashboard/templates"
               className="text-sm font-medium text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
             >
               Templates
-            </Link>
-            <Link
-              href="/dashboard/jobs"
-              className="text-sm font-medium text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
-            >
-              Jobs
             </Link>
             <Link
               href="/dashboard/settings"

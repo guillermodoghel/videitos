@@ -1,12 +1,16 @@
+import { JobsList } from "./jobs/JobsList";
+
 export default function DashboardHomePage() {
   return (
-    <div>
+    <div className="space-y-6">
       <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
-        Home
+        Jobs
       </h1>
-      <p className="mt-2 text-zinc-600 dark:text-zinc-400">
-        Dashboard home — placeholder content.
+      <p className="text-zinc-600 dark:text-zinc-400">
+        Video generation jobs from your templates. New jobs are created when
+        images are added to a template’s Dropbox source folder.
       </p>
+      <JobsList />
     </div>
   );
 }
