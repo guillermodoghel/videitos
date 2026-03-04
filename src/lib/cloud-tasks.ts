@@ -1,14 +1,15 @@
 /**
- * Google Cloud Tasks: create queue per (userId, modelId) with model rate limit,
- * enqueue job processing task that hits our callback.
+ * Google Cloud Tasks via REST API (no @google-cloud/tasks dependency).
+ * Create queue per (userId, modelId) with model rate limit; enqueue task to our callback.
  */
 
-import { CloudTasksClient } from "@google-cloud/tasks";
 import { createHash } from "crypto";
+import { SignJWT, importPKCS8 } from "jose";
 import { getModelRateLimit } from "@/lib/video-models";
 
 const projectId = process.env.GCP_PROJECT_ID;
 const location = process.env.GCP_LOCATION ?? "us-central1";
+const CLOUD_TASKS_SCOPE = "https://www.googleapis.com/auth/cloud-tasks";
 
 /** Sanitize HOSTNAME for queue name: no protocol, no dots/special chars, [a-z0-9-], max 40 chars. */
 function sanitizeHostname(host: string): string {
@@ -17,7 +18,7 @@ function sanitizeHostname(host: string): string {
   return (sanitized || "app").slice(0, 40);
 }
 
-/** Queue name must be 1-63 chars, [a-z0-9-]. Includes sanitized HOSTNAME + hash(userId:modelId). */
+/** Queue ID: 1-63 chars, [a-z0-9-]. Includes sanitized HOSTNAME + hash(userId:modelId). */
 function queueIdFor(userId: string, modelId: string): string {
   const host = process.env.HOSTNAME ?? "";
   const prefix = `videitos-${sanitizeHostname(host)}`;
@@ -28,39 +29,115 @@ function queueIdFor(userId: string, modelId: string): string {
 
 /**
  * Parse GCP_SERVICE_ACCOUNT_JSON: raw JSON string or base64-encoded JSON.
- * Base64 is useful in .env to avoid escaping quotes (e.g. echo -n '<key.json' | base64).
  */
-function parseServiceAccountJson(raw: string): object | null {
+function parseServiceAccountJson(raw: string): { client_email: string; private_key: string } | null {
   const s = raw.trim();
+  let obj: unknown;
   if (s.startsWith("{")) {
     try {
-      return JSON.parse(s) as object;
+      obj = JSON.parse(s);
+    } catch {
+      return null;
+    }
+  } else {
+    try {
+      const decoded = Buffer.from(s, "base64").toString("utf8");
+      obj = decoded.startsWith("{") ? JSON.parse(decoded) : null;
     } catch {
       return null;
     }
   }
-  try {
-    const decoded = Buffer.from(s, "base64").toString("utf8");
-    return decoded.startsWith("{") ? (JSON.parse(decoded) as object) : null;
-  } catch {
-    return null;
+  if (obj && typeof obj === "object" && "client_email" in obj && "private_key" in obj) {
+    return obj as { client_email: string; private_key: string };
+  }
+  return null;
+}
+
+/** Get OAuth2 access token for Cloud Tasks using service account JWT. */
+async function getAccessToken(sa: { client_email: string; private_key: string }): Promise<string> {
+  const key = await importPKCS8(sa.private_key.replace(/\\n/g, "\n"), "RS256");
+  const now = Math.floor(Date.now() / 1000);
+  const jwt = await new SignJWT({})
+    .setProtectedHeader({ alg: "RS256" })
+    .setIssuer(sa.client_email)
+    .setSubject(sa.client_email)
+    .setAudience("https://oauth2.googleapis.com/token")
+    .setIssuedAt(now)
+    .setExpirationTime(now + 3600)
+    .sign(key);
+
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: jwt,
+      scope: CLOUD_TASKS_SCOPE,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Google OAuth2 token failed: ${res.status} ${text}`);
+  }
+  const data = (await res.json()) as { access_token?: string };
+  if (!data.access_token) throw new Error("Google OAuth2: no access_token");
+  return data.access_token;
+}
+
+function queuePath(queueId: string): string {
+  return `projects/${projectId}/locations/${location}/queues/${queueId}`;
+}
+
+function locationPath(): string {
+  return `projects/${projectId}/locations/${location}`;
+}
+
+async function getQueue(accessToken: string, queueId: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`https://cloudtasks.googleapis.com/v2/${queuePath(queueId)}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  return { ok: res.ok };
+}
+
+async function createQueue(
+  accessToken: string,
+  queueId: string,
+  rateLimits: { maxDispatchesPerSecond: number; maxConcurrentDispatches: number }
+): Promise<void> {
+  const res = await fetch(`https://cloudtasks.googleapis.com/v2/${locationPath()}/queues`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      name: queuePath(queueId),
+      rateLimits,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Cloud Tasks createQueue failed: ${res.status} ${text}`);
   }
 }
 
-/**
- * Build Cloud Tasks client. Credentials from env:
- * - GCP_SERVICE_ACCOUNT_JSON: full JSON key (minified single line) or base64-encoded JSON.
- * - If unset, uses Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS or ADC).
- */
-function getClient(): CloudTasksClient | null {
-  if (!projectId) return null;
-  const raw = process.env.GCP_SERVICE_ACCOUNT_JSON;
-  if (raw) {
-    const credentials = parseServiceAccountJson(raw);
-    if (credentials) return new CloudTasksClient({ credentials });
-    return null;
+async function createTask(
+  accessToken: string,
+  queueId: string,
+  task: { httpRequest: { url: string; httpMethod: string; headers: Record<string, string>; body: string } }
+): Promise<void> {
+  const res = await fetch(`https://cloudtasks.googleapis.com/v2/${queuePath(queueId)}/tasks`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ task }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Cloud Tasks createTask failed: ${res.status} ${text}`);
   }
-  return new CloudTasksClient();
 }
 
 /**
@@ -74,31 +151,31 @@ export async function enqueueJobTask(params: {
   callbackBaseUrl: string;
 }): Promise<boolean> {
   const { userId, modelId, jobId, callbackBaseUrl } = params;
-  const client = getClient();
-  if (!client) {
-    console.error("[CloudTasks] GCP not configured (GCP_PROJECT_ID, optional GCP_SERVICE_ACCOUNT_JSON)");
+  if (!projectId) {
+    console.error("[CloudTasks] GCP_PROJECT_ID not set");
+    return false;
+  }
+  const sa = process.env.GCP_SERVICE_ACCOUNT_JSON
+    ? parseServiceAccountJson(process.env.GCP_SERVICE_ACCOUNT_JSON)
+    : null;
+  if (!sa) {
+    console.error("[CloudTasks] GCP_SERVICE_ACCOUNT_JSON not set or invalid (required in serverless)");
     return false;
   }
 
   const queueId = queueIdFor(userId, modelId);
-  const parent = client.queuePath(projectId!, location, queueId);
   const limit = getModelRateLimit(modelId);
   const maxDispatchesPerSecond = limit.requestsPerWindow / limit.windowSeconds;
   const maxConcurrentDispatches = Math.max(1, limit.requestsPerWindow);
 
   try {
-    try {
-      await client.getQueue({ name: parent });
-    } catch {
-      await client.createQueue({
-        parent: client.locationPath(projectId!, location),
-        queue: {
-          name: parent,
-          rateLimits: {
-            maxDispatchesPerSecond,
-            maxConcurrentDispatches,
-          },
-        },
+    const accessToken = await getAccessToken(sa);
+
+    const { ok: queueExists } = await getQueue(accessToken, queueId);
+    if (!queueExists) {
+      await createQueue(accessToken, queueId, {
+        maxDispatchesPerSecond,
+        maxConcurrentDispatches,
       });
     }
 
@@ -108,15 +185,12 @@ export async function enqueueJobTask(params: {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (secret) headers["X-Job-Process-Secret"] = secret;
 
-    await client.createTask({
-      parent,
-      task: {
-        httpRequest: {
-          url: callbackUrl,
-          httpMethod: "POST" as const,
-          headers,
-          body,
-        },
+    await createTask(accessToken, queueId, {
+      httpRequest: {
+        url: callbackUrl,
+        httpMethod: "POST",
+        headers,
+        body,
       },
     });
     return true;

@@ -14,7 +14,6 @@
     "@aws-sdk/client-s3": "^3.1001.0",
     "@aws-sdk/client-sfn": "^3.1001.0",
     "@aws-sdk/s3-request-presigner": "^3.1001.0",
-    "@google-cloud/tasks": "^6.2.1",
     "@google/genai": "^1.43.0",
     "@prisma/client": "^6.19.2",
     "bcrypt": "^6.0.0",
