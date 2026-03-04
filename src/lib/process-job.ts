@@ -3,6 +3,7 @@
  * Used by claim-and-process (Step Function) and optionally by other callers.
  */
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { parseTemplateConfig, getModelRateLimit } from "@/lib/video-models";
 import { getObjectBody, isS3Key } from "@/lib/s3";
@@ -48,37 +49,59 @@ export async function processJobToVeo(jobId: string): Promise<ProcessJobResult> 
   const limit = getModelRateLimit(modelId);
   const windowStart = new Date(Date.now() - limit.windowSeconds * 1000);
 
-  // Claim a rate-limit slot in a transaction so concurrent executions don't all pass
-  try {
-    await prisma.$transaction(async (tx) => {
-      const inWindow = await tx.job.count({
-        where: {
-          userId: job.userId,
-          template: { model: modelId },
-          OR: [
-            { sentToVeoAt: { gte: windowStart } },
-            { rateLimitClaimedAt: { gte: windowStart } },
-          ],
+  // Claim a rate-limit slot in a serializable transaction so concurrent executions
+  // don't both pass (race condition). On serialization conflict we retry a few times.
+  const RATE_LIMIT_CLAIM_RETRIES = 3;
+  let claimDone = false;
+  for (let attempt = 0; attempt < RATE_LIMIT_CLAIM_RETRIES && !claimDone; attempt++) {
+    try {
+      await prisma.$transaction(
+        async (tx) => {
+          const inWindow = await tx.job.count({
+            where: {
+              userId: job.userId,
+              template: { model: modelId },
+              OR: [
+                { sentToVeoAt: { gte: windowStart } },
+                { rateLimitClaimedAt: { gte: windowStart } },
+              ],
+            },
+          });
+          if (inWindow >= limit.requestsPerWindow) {
+            throw new Error("rate_limit");
+          }
+          const updated = await tx.job.updateMany({
+            where: { id: jobId, status: "queued" },
+            data: { rateLimitClaimedAt: new Date() },
+          });
+          if (updated.count === 0) {
+            throw new Error("rate_limit");
+          }
         },
-      });
-      if (inWindow >= limit.requestsPerWindow) {
-        throw new Error("rate_limit");
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 5000,
+          timeout: 10000,
+        }
+      );
+      claimDone = true;
+    } catch (e) {
+      const isRateLimit = e instanceof Error && e.message === "rate_limit";
+      const isSerialization =
+        e && typeof e === "object" && "code" in e && (e as { code: string }).code === "P2034";
+      if (isRateLimit) {
+        console.log("[process-job] jobId=%s → rate_limit (slot claimed by another or window full)", jobId);
+        return { ok: false, error: "rate_limit" };
       }
-      const updated = await tx.job.updateMany({
-        where: { id: jobId, status: "queued" },
-        data: { rateLimitClaimedAt: new Date() },
-      });
-      if (updated.count === 0) {
-        throw new Error("rate_limit");
+      if (isSerialization && attempt < RATE_LIMIT_CLAIM_RETRIES - 1) {
+        continue;
       }
-    });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (msg === "rate_limit") {
-      console.log("[process-job] jobId=%s → rate_limit (slot claimed by another or window full)", jobId);
-      return { ok: false, error: "rate_limit" };
+      if (isSerialization) {
+        console.log("[process-job] jobId=%s → rate_limit (serialization retries exhausted)", jobId);
+        return { ok: false, error: "rate_limit" };
+      }
+      throw e;
     }
-    throw e;
   }
 
   const apiKey = job.user?.googleAiStudioApiKey;
