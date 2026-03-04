@@ -142,33 +142,33 @@ export function DropboxFolderPicker({ label, value, onChange, disabled }: Props)
               <button
                 type="button"
                 onClick={handleGoUp}
-                className="mb-2 text-sm text-zinc-600 hover:underline dark:text-zinc-400"
+                className="mb-2 text-sm text-zinc-700 hover:underline dark:text-zinc-400"
               >
                 ↑ Parent folder
               </button>
             ) : null}
             {loading ? (
-              <p className="py-4 text-sm text-zinc-500">Loading…</p>
+              <p className="py-4 text-sm text-zinc-600 dark:text-zinc-400">Loading…</p>
             ) : error ? (
               <p className="py-2 text-sm text-red-600 dark:text-red-400">{error}</p>
             ) : (
               <ul className="max-h-64 space-y-1 overflow-y-auto rounded border border-zinc-200 p-2 dark:border-zinc-700">
                 {onlyFolders.length === 0 ? (
-                  <li className="py-2 text-sm text-zinc-500">No folders</li>
+                  <li className="py-2 text-sm text-zinc-600 dark:text-zinc-400">No folders</li>
                 ) : (
                   onlyFolders.map((e) => (
                     <li key={e.path_lower || e.name}>
                       <button
                         type="button"
                         onClick={() => handleNavigateInto(e)}
-                        className="w-full rounded px-2 py-1.5 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                        className="w-full rounded px-2 py-1.5 text-left text-sm text-zinc-900 hover:bg-zinc-100 dark:text-zinc-100 dark:hover:bg-zinc-800"
                       >
                         📁 {e.name}
                       </button>
                       <button
                         type="button"
                         onClick={() => handleSelectFolder(e)}
-                        className="ml-2 text-xs text-zinc-500 hover:underline"
+                        className="ml-2 text-xs text-zinc-600 hover:underline dark:text-zinc-400"
                       >
                         Use this folder
                       </button>
@@ -183,7 +183,7 @@ export function DropboxFolderPicker({ label, value, onChange, disabled }: Props)
                 value={newFolderName}
                 onChange={(e) => setNewFolderName(e.target.value)}
                 placeholder="New folder name"
-                className="min-w-0 flex-1 rounded border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+                className="min-w-0 flex-1 rounded border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-400"
               />
               <button
                 type="button"
