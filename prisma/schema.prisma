@@ -1,0 +1,81 @@
+// Prisma schema - PostgreSQL with "videitos" schema
+// https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["videitos"]
+}
+
+model User {
+  id                    String    @id @default(cuid())
+  email                 String    @unique
+  password              String
+  name                  String?
+  googleAiStudioApiKey  String?
+  dropboxAccessToken    String?
+  dropboxRefreshToken   String?
+  dropboxTokenExpiresAt DateTime?
+  dropboxAccountId      String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  sessions              Session[]
+  templates             Template[]
+  jobs                  Job[]
+
+  @@schema("videitos")
+}
+
+model Template {
+  id                    String   @id @default(cuid())
+  userId                String
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name                  String
+  model                 String
+  enabled               Boolean  @default(true)
+  config                Json
+  dropboxSourcePath     String?
+  dropboxSourceCursor   String?
+  dropboxDestinationPath String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  jobs                  Job[]
+
+  @@schema("videitos")
+}
+
+model Job {
+  id                    String    @id @default(cuid())
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  templateId            String
+  template              Template  @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  status                String    // queued | sent_to_veo | processing | completed | failed
+  dropboxSourceFilePath String
+  dropboxSourceFileId    String?   // optional: use id for download to avoid path encoding issues
+  veoOperationName      String?
+  sentToVeoAt           DateTime?
+  rateLimitClaimedAt    DateTime?   // set when claiming a rate-limit slot (before calling Veo)
+  outputDropboxPath     String?
+  errorMessage          String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  completedAt           DateTime?
+
+  @@schema("videitos")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@schema("videitos")
+}
