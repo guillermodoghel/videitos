@@ -57,7 +57,7 @@ function parseServiceAccountJson(raw: string): { client_email: string; private_k
 async function getAccessToken(sa: { client_email: string; private_key: string }): Promise<string> {
   const key = await importPKCS8(sa.private_key.replace(/\\n/g, "\n"), "RS256");
   const now = Math.floor(Date.now() / 1000);
-  const jwt = await new SignJWT({})
+  const jwt = await new SignJWT({ scope: CLOUD_TASKS_SCOPE })
     .setProtectedHeader({ alg: "RS256" })
     .setIssuer(sa.client_email)
     .setSubject(sa.client_email)
@@ -72,7 +72,6 @@ async function getAccessToken(sa: { client_email: string; private_key: string })
     body: new URLSearchParams({
       grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
       assertion: jwt,
-      scope: CLOUD_TASKS_SCOPE,
     }),
   });
   if (!res.ok) {
