@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUserId } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { startJobStepFunction } from "@/lib/step-function";
+import { enqueueJobTask } from "@/lib/cloud-tasks";
 
 const HOSTNAME = process.env.HOSTNAME ?? "http://localhost:3000";
 
 /**
  * POST /api/jobs/start-execution
- * Start the Step Function for a queued job. Body: { jobId } (optional; if omitted, starts oldest queued job for current user).
+ * Enqueue a queued job to Cloud Tasks (so it gets processed and Step Function runs). Body: { jobId } (optional).
  * Auth: session (user) or x-internal-secret / Authorization (JOB_PROCESS_SECRET).
  */
 export async function POST(request: NextRequest) {
@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
 
   const job = await prisma.job.findUnique({
     where: { id: jobId },
-    select: { id: true, userId: true, status: true },
+    select: { id: true, userId: true, status: true, template: { select: { model: true } } },
   });
   if (!job) {
     return NextResponse.json({ error: "Job not found" }, { status: 404 });
@@ -60,13 +60,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const started = await startJobStepFunction({
-    callbackBaseUrl: HOSTNAME.replace(/\/$/, ""),
+  const enqueued = await enqueueJobTask({
+    userId: job.userId,
+    modelId: job.template.model,
     jobId: job.id,
+    callbackBaseUrl: HOSTNAME.replace(/\/$/, ""),
   });
 
-  if (!started) {
-    return NextResponse.json({ error: "Failed to start Step Function" }, { status: 500 });
+  if (!enqueued) {
+    return NextResponse.json({ error: "Failed to enqueue job (check GCP config)" }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true, jobId: job.id });

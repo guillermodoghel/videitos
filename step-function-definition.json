@@ -1,69 +1,7 @@
 {
-  "Comment": "Per-job: claim slot (rate limit) then process; when slot free, poll Veo status and callback on ready/error. Input: { callbackBaseUrl, jobId }.",
-  "StartAt": "ClaimAndProcess",
+  "Comment": "Per-job: poll Veo status and callback on ready/error. Input: { callbackBaseUrl, jobId, operationName }. Job processing is done by Cloud Tasks callback.",
+  "StartAt": "CheckStatus",
   "States": {
-    "ClaimAndProcess": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::lambda:invoke",
-      "Parameters": {
-        "FunctionName": "arn:aws:lambda:us-east-1:917411395508:function:callbackApiCall",
-        "Payload": {
-          "callbackBaseUrl.$": "$.callbackBaseUrl",
-          "apiPath": "/api/jobs/claim-and-process",
-          "body": {
-            "jobId.$": "$.jobId"
-          }
-        }
-      },
-      "ResultPath": "$.claimResult",
-      "Next": "BranchOnClaim",
-      "Retry": [
-        {
-          "ErrorEquals": ["States.ALL"],
-          "IntervalSeconds": 10,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ]
-    },
-    "BranchOnClaim": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.claimResult.Payload.success",
-          "BooleanEquals": true,
-          "Next": "CheckStatus"
-        },
-        {
-          "Variable": "$.claimResult.Payload.fatal",
-          "BooleanEquals": true,
-          "Next": "CallbackClaimFailed"
-        }
-      ],
-      "Default": "WaitThenRetryClaim"
-    },
-    "CallbackClaimFailed": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::lambda:invoke",
-      "Parameters": {
-        "FunctionName": "arn:aws:lambda:us-east-1:917411395508:function:callbackApiCall",
-        "Payload": {
-          "callbackBaseUrl.$": "$.callbackBaseUrl",
-          "apiPath": "/api/webhook/veo",
-          "body": {
-            "status": "error",
-            "error.$": "$.claimResult.Payload.error",
-            "jobId.$": "$.jobId"
-          }
-        }
-      },
-      "End": true
-    },
-    "WaitThenRetryClaim": {
-      "Type": "Wait",
-      "Seconds": 5,
-      "Next": "ClaimAndProcess"
-    },
     "CheckStatus": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
@@ -73,7 +11,7 @@
           "callbackBaseUrl.$": "$.callbackBaseUrl",
           "apiPath": "/api/veo-status",
           "body": {
-            "operationName.$": "$.claimResult.Payload.operationName",
+            "operationName.$": "$.operationName",
             "jobId.$": "$.jobId"
           }
         }
@@ -125,7 +63,7 @@
           "body": {
             "status": "ready",
             "videoUri.$": "$.checkResult.Payload.videoUri",
-            "operationName.$": "$.claimResult.Payload.operationName",
+            "operationName.$": "$.operationName",
             "jobId.$": "$.jobId"
           }
         }
@@ -143,7 +81,7 @@
           "body": {
             "status": "error",
             "error.$": "$.checkResult.Payload.error",
-            "operationName.$": "$.claimResult.Payload.operationName",
+            "operationName.$": "$.operationName",
             "jobId.$": "$.jobId"
           }
         }

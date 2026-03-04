@@ -14,11 +14,22 @@ export type ProcessJobResult =
   | { ok: true; operationName: string }
   | { ok: false; error: string };
 
+export type ProcessJobOptions = {
+  /** When true (e.g. from Cloud Tasks callback), skip DB rate-limit claim; queue enforces rate. */
+  skipRateLimit?: boolean;
+};
+
 /**
- * If a slot is available (rate limit), run Veo for the job and update it to sent_to_veo.
+ * Run Veo for the job and update it to sent_to_veo.
+ * When skipRateLimit is false, claims a rate-limit slot in DB first.
  * Returns { ok: true, operationName } or { ok: false, error }.
+ * error "rate_limit" means caller should retry (e.g. return 429).
  */
-export async function processJobToVeo(jobId: string): Promise<ProcessJobResult> {
+export async function processJobToVeo(
+  jobId: string,
+  options: ProcessJobOptions = {}
+): Promise<ProcessJobResult> {
+  const { skipRateLimit = false } = options;
   const job = await prisma.job.findUnique({
     where: { id: jobId },
     include: {
@@ -46,61 +57,61 @@ export async function processJobToVeo(jobId: string): Promise<ProcessJobResult> 
   }
 
   const modelId = job.template.model;
-  const limit = getModelRateLimit(modelId);
-  const windowStart = new Date(Date.now() - limit.windowSeconds * 1000);
 
-  // Claim a rate-limit slot in a serializable transaction so concurrent executions
-  // don't both pass (race condition). On serialization conflict we retry a few times.
-  const RATE_LIMIT_CLAIM_RETRIES = 3;
-  let claimDone = false;
-  for (let attempt = 0; attempt < RATE_LIMIT_CLAIM_RETRIES && !claimDone; attempt++) {
-    try {
-      await prisma.$transaction(
-        async (tx) => {
-          const inWindow = await tx.job.count({
-            where: {
-              userId: job.userId,
-              template: { model: modelId },
-              OR: [
-                { sentToVeoAt: { gte: windowStart } },
-                { rateLimitClaimedAt: { gte: windowStart } },
-              ],
-            },
-          });
-          if (inWindow >= limit.requestsPerWindow) {
-            throw new Error("rate_limit");
+  if (!skipRateLimit) {
+    const limit = getModelRateLimit(modelId);
+    const windowStart = new Date(Date.now() - limit.windowSeconds * 1000);
+    const RATE_LIMIT_CLAIM_RETRIES = 3;
+    let claimDone = false;
+    for (let attempt = 0; attempt < RATE_LIMIT_CLAIM_RETRIES && !claimDone; attempt++) {
+      try {
+        await prisma.$transaction(
+          async (tx) => {
+            const inWindow = await tx.job.count({
+              where: {
+                userId: job.userId,
+                template: { model: modelId },
+                OR: [
+                  { sentToVeoAt: { gte: windowStart } },
+                  { rateLimitClaimedAt: { gte: windowStart } },
+                ],
+              },
+            });
+            if (inWindow >= limit.requestsPerWindow) {
+              throw new Error("rate_limit");
+            }
+            const updated = await tx.job.updateMany({
+              where: { id: jobId, status: "queued" },
+              data: { rateLimitClaimedAt: new Date() },
+            });
+            if (updated.count === 0) {
+              throw new Error("rate_limit");
+            }
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+            maxWait: 5000,
+            timeout: 10000,
           }
-          const updated = await tx.job.updateMany({
-            where: { id: jobId, status: "queued" },
-            data: { rateLimitClaimedAt: new Date() },
-          });
-          if (updated.count === 0) {
-            throw new Error("rate_limit");
-          }
-        },
-        {
-          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-          maxWait: 5000,
-          timeout: 10000,
+        );
+        claimDone = true;
+      } catch (e) {
+        const isRateLimit = e instanceof Error && e.message === "rate_limit";
+        const isSerialization =
+          e && typeof e === "object" && "code" in e && (e as { code: string }).code === "P2034";
+        if (isRateLimit) {
+          console.log("[process-job] jobId=%s → rate_limit (slot claimed by another or window full)", jobId);
+          return { ok: false, error: "rate_limit" };
         }
-      );
-      claimDone = true;
-    } catch (e) {
-      const isRateLimit = e instanceof Error && e.message === "rate_limit";
-      const isSerialization =
-        e && typeof e === "object" && "code" in e && (e as { code: string }).code === "P2034";
-      if (isRateLimit) {
-        console.log("[process-job] jobId=%s → rate_limit (slot claimed by another or window full)", jobId);
-        return { ok: false, error: "rate_limit" };
+        if (isSerialization && attempt < RATE_LIMIT_CLAIM_RETRIES - 1) {
+          continue;
+        }
+        if (isSerialization) {
+          console.log("[process-job] jobId=%s → rate_limit (serialization retries exhausted)", jobId);
+          return { ok: false, error: "rate_limit" };
+        }
+        throw e;
       }
-      if (isSerialization && attempt < RATE_LIMIT_CLAIM_RETRIES - 1) {
-        continue;
-      }
-      if (isSerialization) {
-        console.log("[process-job] jobId=%s → rate_limit (serialization retries exhausted)", jobId);
-        return { ok: false, error: "rate_limit" };
-      }
-      throw e;
     }
   }
 
@@ -167,11 +178,14 @@ export async function processJobToVeo(jobId: string): Promise<ProcessJobResult> 
   const result = await startVeoGeneration(apiKey, { prompt: config.prompt, config, images });
 
   if ("error" in result) {
-    console.log("[process-job] jobId=%s → Veo error: %s", jobId, result.error);
-    await prisma.job.update({
-      where: { id: job.id },
-      data: { status: "failed", errorMessage: result.error, completedAt: new Date() },
-    });
+    const isVeoRateLimit = result.error === "rate_limit";
+    console.log("[process-job] jobId=%s → Veo error: %s%s", jobId, result.error, isVeoRateLimit ? " (retry)" : "");
+    if (!isVeoRateLimit) {
+      await prisma.job.update({
+        where: { id: job.id },
+        data: { status: "failed", errorMessage: result.error, completedAt: new Date() },
+      });
+    }
     return { ok: false, error: result.error };
   }
 

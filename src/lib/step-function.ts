@@ -16,12 +16,13 @@ function getClient(): SFNClient | null {
 }
 
 /**
- * Start the per-job Step Function. Input: callbackBaseUrl, jobId.
- * The state machine will claim a slot (rate limit), process the job, then poll Veo and callback.
+ * Start the per-job Step Function (poll-only). Input: callbackBaseUrl, jobId, operationName.
+ * The state machine polls Veo status and callbacks on ready/error. Job processing is done by Cloud Tasks callback.
  */
 export async function startJobStepFunction(input: {
   callbackBaseUrl: string;
   jobId: string;
+  operationName: string;
 }): Promise<boolean> {
   const arn = process.env.STEP_FUNCTION_ARN;
   if (!arn) {

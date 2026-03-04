@@ -6,7 +6,7 @@ import {
   listFolderWithCursor,
   listFolderContinue,
 } from "@/lib/dropbox";
-import { startJobStepFunction } from "@/lib/step-function";
+import { enqueueJobTask } from "@/lib/cloud-tasks";
 
 /** GET: Dropbox webhook verification - echo the challenge parameter */
 export async function GET(request: NextRequest) {
@@ -147,10 +147,12 @@ export async function POST(request: NextRequest) {
                 },
               });
               const host = process.env.HOSTNAME ?? "http://localhost:3000";
-              startJobStepFunction({
-                callbackBaseUrl: host.replace(/\/$/, ""),
+              enqueueJobTask({
+                userId: user.id,
+                modelId: template.model,
                 jobId: job.id,
-              }).catch((err) => console.error("[Dropbox webhook] Start Step Function failed:", err));
+                callbackBaseUrl: host.replace(/\/$/, ""),
+              }).catch((err) => console.error("[Dropbox webhook] Enqueue Cloud Task failed:", err));
             }
           }
         }

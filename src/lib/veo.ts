@@ -101,7 +101,15 @@ export async function startVeoGeneration(
     return { operationName: name };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    return { error: message };
+    const status = e && typeof e === "object" && "status" in e ? (e as { status: number }).status : 0;
+    const lower = message.toLowerCase();
+    const isRateLimit =
+      status === 429 ||
+      lower.includes("resource exhausted") ||
+      lower.includes("quota") ||
+      lower.includes("rate limit") ||
+      lower.includes("too many requests");
+    return { error: isRateLimit ? "rate_limit" : message };
   }
 }
 
