@@ -1,0 +1,36 @@
+# Run Prisma migrations against the production database.
+# Requires GitHub secrets: POSTGRES_PRISMA_URL, POSTGRES_URL_NON_POOLING
+# (Use the same values as in Vercel → Environment Variables; POSTGRES_URL_NON_POOLING = direct connection, port 5432)
+
+name: Prisma migrate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "prisma/**"
+      - "package.json"
+      - "package-lock.json"
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run migrations
+        env:
+          POSTGRES_PRISMA_URL: ${{ secrets.POSTGRES_PRISMA_URL }}
+          POSTGRES_URL_NON_POOLING: ${{ secrets.POSTGRES_URL_NON_POOLING }}
+        run: npx prisma migrate deploy
