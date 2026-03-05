@@ -1,13 +1,14 @@
 # Run Prisma migrations against the production database.
-# Runs automatically on every push to main, and can be triggered manually.
-# Uses non-pooling URL only to avoid connection timeouts in CI.
-# Requires GitHub secret: POSTGRES_URL_NON_POOLING (direct connection, port 5432; copy from Vercel/Supabase)
+# Triggers: every push to main (including merges), or manual run.
+# Requires GitHub secret: POSTGRES_URL_NON_POOLING (direct connection, port 5432).
 
 name: Prisma migrate
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - master
   workflow_dispatch:
 
 jobs:
