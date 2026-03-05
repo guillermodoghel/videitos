@@ -10,6 +10,7 @@ type JobRow = {
   model: string;
   dropboxSourceFilePath: string;
   outputDropboxPath: string | null;
+  preGenImageKey: string | null;
   errorMessage: string | null;
   createdAt: string;
   sentAt: string | null;
@@ -19,6 +20,7 @@ type JobRow = {
 type JobDetails = {
   referenceImageUrls: string[];
   sourceImageUrl: string | null;
+  preGenImageUrl: string | null;
   outputVideoUrl: string | null;
 };
 
@@ -61,6 +63,7 @@ function modelLabel(modelId: string): string {
 
 function JobDetailsPanel({ job, details }: { job: JobRow; details?: JobDetails | null }) {
   const hasInputs = details && (details.referenceImageUrls.length > 0 || details.sourceImageUrl);
+  const hasPreGen = details?.preGenImageUrl;
   const hasOutput = job.status === "completed" && details?.outputVideoUrl;
 
   return (
@@ -134,6 +137,25 @@ function JobDetailsPanel({ job, details }: { job: JobRow; details?: JobDetails |
           )}
         </div>
       )}
+      {hasPreGen && details.preGenImageUrl && (
+        <div>
+          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            Generated image (pre-gen)
+          </h4>
+          <a
+            href={details.preGenImageUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block max-w-sm overflow-hidden rounded-lg border border-zinc-200 shadow-sm dark:border-zinc-600"
+          >
+            <img
+              src={details.preGenImageUrl}
+              alt="Pre-generation output"
+              className="h-auto w-full object-contain"
+            />
+          </a>
+        </div>
+      )}
       {hasOutput && details.outputVideoUrl && (
         <div>
           <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
@@ -158,7 +180,7 @@ function JobDetailsPanel({ job, details }: { job: JobRow; details?: JobDetails |
           </div>
         </div>
       )}
-      {details && !hasInputs && !hasOutput && (
+      {details && !hasInputs && !hasPreGen && !hasOutput && (
         <p className="text-sm text-zinc-500 dark:text-zinc-400">No previews available.</p>
       )}
     </div>

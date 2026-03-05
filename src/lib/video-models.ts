@@ -50,6 +50,13 @@ export function isRunwayImageToVideoModel(modelId: string): boolean {
 
 export type VideoModelId = (typeof VIDEO_MODELS)[number]["id"];
 
+/** Optional pre-generation: generate an image from prompt + refs, then use as first frame for video. */
+export interface PreGenConfig {
+  prompt: string;
+  /** S3 keys for 1–2 reference images (Runway text_to_image allows 1–3). */
+  referenceImageUrls: string[];
+}
+
 /** Veo 3.1 config shape (prompt, aspect ratio, resolution, duration, optional reference images) */
 export interface VeoConfig {
   prompt: string;
@@ -60,6 +67,8 @@ export interface VeoConfig {
   referenceImageUrls?: string[];
   /** Runway Veo 3.1 Fast only: include audio in generated video (default false = muted) */
   audio?: boolean;
+  /** Optional: generate image from prompt + refs first, use that image as video first frame. */
+  preGen?: PreGenConfig;
 }
 
 export const VEO_DEFAULTS: VeoConfig = {
@@ -113,6 +122,16 @@ export function parseTemplateConfig(modelId: string, config: unknown): VeoConfig
     if (isRunwayImageToVideoModel(modelId)) {
       base.referenceImageUrls = [];
       if (modelId === "veo3.1_fast" && typeof c.audio === "boolean") base.audio = c.audio;
+      if (c.preGen && typeof c.preGen === "object") {
+        const pg = c.preGen as Record<string, unknown>;
+        const prompt = typeof pg.prompt === "string" ? pg.prompt : "";
+        const refs = Array.isArray(pg.referenceImageUrls)
+          ? pg.referenceImageUrls.filter((u): u is string => typeof u === "string").slice(0, 3)
+          : [];
+        if (prompt || refs.length > 0) {
+          base.preGen = { prompt, referenceImageUrls: refs };
+        }
+      }
     }
   }
   return base;

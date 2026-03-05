@@ -42,6 +42,7 @@ export async function GET(request: NextRequest) {
     model: j.template.model,
     dropboxSourceFilePath: j.dropboxSourceFilePath,
     outputDropboxPath: j.outputDropboxPath,
+    preGenImageKey: j.preGenImageKey ?? null,
     errorMessage: j.errorMessage,
     createdAt: j.createdAt.toISOString(),
     sentAt: j.sentAt?.toISOString() ?? null,

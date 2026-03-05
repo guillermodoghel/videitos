@@ -31,6 +31,21 @@ export function referenceImageKey(
   return `${userId}/${templateId}/references/${safe}`;
 }
 
+/** S3 key format: userId/templateId/pregen_refs/filename (for pre-gen reference images) */
+export function preGenReferenceImageKey(
+  userId: string,
+  templateId: string,
+  filename: string
+): string {
+  const safe = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return `${userId}/${templateId}/pregen_refs/${safe}`;
+}
+
+/** S3 key format: userId/jobs/jobId/pregen.ext (pre-gen output image for job list) */
+export function preGenOutputImageKey(userId: string, jobId: string, ext: "png" | "jpg"): string {
+  return `${userId}/jobs/${jobId}/pregen.${ext}`;
+}
+
 export async function uploadReferenceImage(
   userId: string,
   templateId: string,
@@ -51,6 +66,54 @@ export async function uploadReferenceImage(
       Key: key,
       Body: file.buffer,
       ContentType: file.mimetype,
+    })
+  );
+  return key;
+}
+
+export async function uploadPreGenReferenceImage(
+  userId: string,
+  templateId: string,
+  file: { buffer: Buffer; mimetype: string; originalName?: string }
+): Promise<string | null> {
+  const client = getClient();
+  if (!client || !bucket) return null;
+
+  const ext = file.mimetype === "image/png" ? "png" : file.mimetype === "image/jpeg" || file.mimetype === "image/jpg" ? "jpg" : "png";
+  const baseName = file.originalName?.replace(/\.[^.]+$/, "") || "image";
+  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const filename = `${baseName}-${unique}.${ext}`;
+  const key = preGenReferenceImageKey(userId, templateId, filename);
+
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: file.buffer,
+      ContentType: file.mimetype,
+    })
+  );
+  return key;
+}
+
+export async function uploadPreGenOutputImage(
+  userId: string,
+  jobId: string,
+  buffer: Buffer,
+  mimetype: string
+): Promise<string | null> {
+  const client = getClient();
+  if (!client || !bucket) return null;
+
+  const ext = mimetype === "image/png" ? "png" : "jpg";
+  const key = preGenOutputImageKey(userId, jobId, ext);
+
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: buffer,
+      ContentType: mimetype,
     })
   );
   return key;

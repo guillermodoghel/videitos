@@ -6,8 +6,14 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { parseTemplateConfig, getModelRateLimit, isRunwayImageToVideoModel, RUNWAY_IMAGE_TO_VIDEO_IDS } from "@/lib/video-models";
+import { getObjectBody, isS3Key, uploadPreGenOutputImage } from "@/lib/s3";
 import { getValidAccessToken, downloadFile } from "@/lib/dropbox";
-import { startRunwayImageToVideo, aspectRatioToRunwayRatio, type RunwayImageToVideoModel } from "@/lib/runway";
+import {
+  startRunwayImageToVideo,
+  aspectRatioToRunwayRatio,
+  runRunwayTextToImageAndWait,
+  type RunwayImageToVideoModel,
+} from "@/lib/runway";
 
 export type ProcessJobResult =
   | { ok: true; operationName: string }
@@ -150,23 +156,92 @@ export async function processJob(
       });
       return { ok: false, error: "Dropbox not connected" };
     }
-    const sourcePathOrId = job.dropboxSourceFileId
-      ? job.dropboxSourceFileId.startsWith("id:")
-        ? job.dropboxSourceFileId
-        : `id:${job.dropboxSourceFileId}`
-      : job.dropboxSourceFilePath;
-    const newImageBuf = await downloadFile(token, sourcePathOrId);
-    if (!newImageBuf) {
-      console.log("[process-job] jobId=%s → Failed to download source image from Dropbox", jobId);
-      await prisma.job.update({
-        where: { id: job.id },
-        data: { status: "failed", errorMessage: "Failed to download source image from Dropbox", completedAt: new Date() },
+
+    let promptImage: string;
+
+    const preGen = config.preGen;
+    if (preGen?.prompt?.trim() && preGen.referenceImageUrls?.length >= 1) {
+      const refUris: { uri: string; tag?: string }[] = [];
+      for (const key of preGen.referenceImageUrls.slice(0, 2)) {
+        if (!isS3Key(key)) continue;
+        const buf = await getObjectBody(key);
+        if (!buf) continue;
+        const mime = key.toLowerCase().endsWith(".png") ? "image/png" : key.toLowerCase().endsWith(".webp") ? "image/webp" : "image/jpeg";
+        refUris.push({ uri: `data:${mime};base64,${buf.toString("base64")}` });
+      }
+      const sourcePathOrId = job.dropboxSourceFileId
+        ? job.dropboxSourceFileId.startsWith("id:")
+          ? job.dropboxSourceFileId
+          : `id:${job.dropboxSourceFileId}`
+        : job.dropboxSourceFilePath;
+      const dropboxImageBuf = await downloadFile(token, sourcePathOrId);
+      if (dropboxImageBuf) {
+        const ext = job.dropboxSourceFilePath.split(".").pop()?.toLowerCase() ?? "jpg";
+        const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+        refUris.push({
+          uri: `data:${mime};base64,${dropboxImageBuf.toString("base64")}`,
+          tag: "character",
+        });
+      }
+      if (refUris.length < 1) {
+        console.log("[process-job] jobId=%s → Pre-gen: no valid reference images", jobId);
+        await prisma.job.update({
+          where: { id: job.id },
+          data: { status: "failed", errorMessage: "Pre-generation: no valid reference images", completedAt: new Date() },
+        });
+        return { ok: false, error: "Pre-gen refs missing" };
+      }
+      console.log("[process-job] jobId=%s → Pre-gen: text-to-image (%s refs, character from Dropbox)", jobId, refUris.length);
+      const preGenResult = await runRunwayTextToImageAndWait(apiKey, {
+        promptText: preGen.prompt.trim(),
+        ratio: aspectRatioToRunwayRatio(config.aspectRatio),
+        referenceImages: refUris,
       });
-      return { ok: false, error: "Failed to download source image" };
+      if ("error" in preGenResult) {
+        const isRateLimit = preGenResult.error === "rate_limit";
+        console.log("[process-job] jobId=%s → Pre-gen error: %s%s", jobId, preGenResult.error, isRateLimit ? " (retry)" : "");
+        if (!isRateLimit) {
+          await prisma.job.update({
+            where: { id: job.id },
+            data: { status: "failed", errorMessage: `Pre-generation: ${preGenResult.error}`, completedAt: new Date() },
+          });
+        }
+        return { ok: false, error: preGenResult.error };
+      }
+      promptImage = preGenResult.imageUri;
+      const imageRes = await fetch(preGenResult.imageUri);
+      if (imageRes.ok) {
+        const imageBuf = Buffer.from(await imageRes.arrayBuffer());
+        const contentType = imageRes.headers.get("content-type") ?? "image/png";
+        const mime = contentType.includes("png") ? "image/png" : "image/jpeg";
+        const key = await uploadPreGenOutputImage(job.userId, job.id, imageBuf, mime);
+        if (key) {
+          await prisma.job.update({
+            where: { id: job.id },
+            data: { preGenImageKey: key },
+          });
+        }
+      }
+      console.log("[process-job] jobId=%s → Pre-gen done, using image as first frame", jobId);
+    } else {
+      const sourcePathOrId = job.dropboxSourceFileId
+        ? job.dropboxSourceFileId.startsWith("id:")
+          ? job.dropboxSourceFileId
+          : `id:${job.dropboxSourceFileId}`
+        : job.dropboxSourceFilePath;
+      const newImageBuf = await downloadFile(token, sourcePathOrId);
+      if (!newImageBuf) {
+        console.log("[process-job] jobId=%s → Failed to download source image from Dropbox", jobId);
+        await prisma.job.update({
+          where: { id: job.id },
+          data: { status: "failed", errorMessage: "Failed to download source image from Dropbox", completedAt: new Date() },
+        });
+        return { ok: false, error: "Failed to download source image" };
+      }
+      const ext = job.dropboxSourceFilePath.split(".").pop()?.toLowerCase() ?? "jpg";
+      const newMime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+      promptImage = `data:${newMime};base64,${newImageBuf.toString("base64")}`;
     }
-    const ext = job.dropboxSourceFilePath.split(".").pop()?.toLowerCase() ?? "jpg";
-    const newMime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
-    const promptImage = `data:${newMime};base64,${newImageBuf.toString("base64")}`;
     const result = await startRunwayImageToVideo(apiKey, {
       model: modelId as RunwayImageToVideoModel,
       promptText: config.prompt,

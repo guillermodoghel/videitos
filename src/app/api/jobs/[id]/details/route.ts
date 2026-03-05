@@ -41,6 +41,12 @@ export async function GET(
     if (url) referenceImageUrls.push(url);
   }
 
+  let preGenImageUrl: string | null = null;
+  if (job.preGenImageKey && job.preGenImageKey.startsWith(userId + "/")) {
+    const url = await getPresignedUrl(job.preGenImageKey);
+    if (url) preGenImageUrl = url;
+  }
+
   let sourceImageUrl: string | null = null;
   let outputVideoUrl: string | null = null;
   const token = await getValidAccessToken(userId);
@@ -61,6 +67,7 @@ export async function GET(
   return NextResponse.json({
     referenceImageUrls,
     sourceImageUrl,
+    preGenImageUrl,
     outputVideoUrl,
   });
 }

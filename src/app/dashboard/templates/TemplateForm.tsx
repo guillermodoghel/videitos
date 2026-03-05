@@ -55,10 +55,16 @@ export function TemplateForm({
   const [dropboxSourcePath, setDropboxSourcePath] = useState(initialDropboxSourcePath ?? "");
   const [dropboxDestinationPath, setDropboxDestinationPath] = useState(initialDropboxDestinationPath ?? "");
   const existingRefs = config.referenceImageUrls ?? [];
+  const existingPreGenRefs = config.preGen?.referenceImageUrls ?? [];
   const [refFile0, setRefFile0] = useState<File | null>(null);
   const [refFile1, setRefFile1] = useState<File | null>(null);
   const [preview0, setPreview0] = useState<string | null>(null);
   const [preview1, setPreview1] = useState<string | null>(null);
+  const [preGenPrompt, setPreGenPrompt] = useState(config.preGen?.prompt ?? "");
+  const [preGenRefFile0, setPreGenRefFile0] = useState<File | null>(null);
+  const [preGenRefFile1, setPreGenRefFile1] = useState<File | null>(null);
+  const [preGenPreview0, setPreGenPreview0] = useState<string | null>(null);
+  const [preGenPreview1, setPreGenPreview1] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -98,10 +104,39 @@ export function TemplateForm({
     return () => URL.revokeObjectURL(url);
   }, [refFile1]);
 
+  useEffect(() => {
+    if (!preGenRefFile0) {
+      setPreGenPreview0(null);
+      return;
+    }
+    const url = URL.createObjectURL(preGenRefFile0);
+    setPreGenPreview0(url);
+    return () => URL.revokeObjectURL(url);
+  }, [preGenRefFile0]);
+
+  useEffect(() => {
+    if (!preGenRefFile1) {
+      setPreGenPreview1(null);
+      return;
+    }
+    const url = URL.createObjectURL(preGenRefFile1);
+    setPreGenPreview1(url);
+    return () => URL.revokeObjectURL(url);
+  }, [preGenRefFile1]);
+
   function refDisplayUrl(index: number): string | null {
     if (index === 0 && preview0) return preview0;
     if (index === 1 && preview1) return preview1;
     const keyOrUrl = existingRefs[index];
+    if (!keyOrUrl) return null;
+    if (keyOrUrl.startsWith("http://") || keyOrUrl.startsWith("https://")) return keyOrUrl;
+    return `/api/templates/references/url?key=${encodeURIComponent(keyOrUrl)}`;
+  }
+
+  function preGenRefDisplayUrl(index: number): string | null {
+    if (index === 0 && preGenPreview0) return preGenPreview0;
+    if (index === 1 && preGenPreview1) return preGenPreview1;
+    const keyOrUrl = existingPreGenRefs[index];
     if (!keyOrUrl) return null;
     if (keyOrUrl.startsWith("http://") || keyOrUrl.startsWith("https://")) return keyOrUrl;
     return `/api/templates/references/url?key=${encodeURIComponent(keyOrUrl)}`;
@@ -121,6 +156,12 @@ export function TemplateForm({
     if (model === "veo3.1_fast") {
       configPayload.audio = runwayAudio;
     }
+    if (isRunwayImageToVideoModel(model) && (preGenPrompt.trim() || existingPreGenRefs.length > 0 || preGenRefFile0 || preGenRefFile1)) {
+      configPayload.preGen = {
+        prompt: preGenPrompt.trim(),
+        referenceImageUrls: templateId ? existingPreGenRefs : [],
+      };
+    }
     try {
       const url = templateId ? `/api/templates/${templateId}` : "/api/templates";
       const method = templateId ? "PATCH" : "POST";
@@ -136,6 +177,8 @@ export function TemplateForm({
       }
       if (refFile0) formData.set("reference0", refFile0);
       if (refFile1) formData.set("reference1", refFile1);
+      if (preGenRefFile0) formData.set("preGenRef0", preGenRefFile0);
+      if (preGenRefFile1) formData.set("preGenRef1", preGenRefFile1);
 
       const res = await fetch(url, { method, body: formData });
       const data = await res.json().catch(() => ({}));
@@ -294,6 +337,70 @@ export function TemplateForm({
           <label htmlFor="runway-audio" className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
             Include audio in video
           </label>
+        </div>
+      )}
+
+      {isRunwayImageToVideoModel(model) && (
+        <div className="rounded-lg border border-zinc-200 bg-zinc-50/50 p-4 dark:border-zinc-700 dark:bg-zinc-800/50">
+          <span className="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+            Pre-generation step (optional)
+          </span>
+          <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
+            Generate an image from a prompt and reference images first; that image is then used as the first frame for the video. Leave empty to use the Dropbox input image directly.
+          </p>
+          <div className="space-y-3">
+            <div>
+              <label htmlFor="preGenPrompt" className="mb-1 block text-xs text-zinc-500 dark:text-zinc-400">
+                Image generation prompt
+              </label>
+              <textarea
+                id="preGenPrompt"
+                value={preGenPrompt}
+                onChange={(e) => setPreGenPrompt(e.target.value)}
+                rows={2}
+                className={inputClass}
+                placeholder="Describe the image to generate..."
+              />
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs text-zinc-500 dark:text-zinc-400">
+                  Reference image 1
+                </label>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/jpg,image/webp"
+                  onChange={(e) => setPreGenRefFile0(e.target.files?.[0] ?? null)}
+                  className={inputClass}
+                />
+                {preGenRefDisplayUrl(0) && (
+                  <img
+                    src={preGenRefDisplayUrl(0)!}
+                    alt="Pre-gen ref 1"
+                    className="mt-2 max-h-32 rounded border border-zinc-200 object-contain dark:border-zinc-700"
+                  />
+                )}
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-zinc-500 dark:text-zinc-400">
+                  Reference image 2
+                </label>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/jpg,image/webp"
+                  onChange={(e) => setPreGenRefFile1(e.target.files?.[0] ?? null)}
+                  className={inputClass}
+                />
+                {preGenRefDisplayUrl(1) && (
+                  <img
+                    src={preGenRefDisplayUrl(1)!}
+                    alt="Pre-gen ref 2"
+                    className="mt-2 max-h-32 rounded border border-zinc-200 object-contain dark:border-zinc-700"
+                  />
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

@@ -64,6 +64,7 @@ model Job {
   sentAt                DateTime? // when job was sent to provider
   rateLimitClaimedAt    DateTime? // set when claiming a rate-limit slot (before calling provider)
   outputDropboxPath     String?
+  preGenImageKey        String?   // S3 key of pre-generation (text-to-image) output for display
   errorMessage          String?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt

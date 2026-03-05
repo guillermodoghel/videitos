@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionUserId } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { parseTemplateConfig } from "@/lib/video-models";
-import { uploadReferenceImage } from "@/lib/s3";
+import { uploadReferenceImage, uploadPreGenReferenceImage } from "@/lib/s3";
 
 const ALLOWED_MIMES = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
@@ -15,6 +15,8 @@ async function parseBody(request: NextRequest): Promise<{
   dropboxDestinationPath?: string | null;
   reference0?: File | null;
   reference1?: File | null;
+  preGenRef0?: File | null;
+  preGenRef1?: File | null;
 }> {
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("multipart/form-data")) {
@@ -28,6 +30,8 @@ async function parseBody(request: NextRequest): Promise<{
       dropboxDestinationPath: (formData.get("dropboxDestinationPath") as string) || null,
       reference0: formData.get("reference0") as File | null,
       reference1: formData.get("reference1") as File | null,
+      preGenRef0: formData.get("preGenRef0") as File | null,
+      preGenRef1: formData.get("preGenRef1") as File | null,
     };
   }
   const body = await request.json();
@@ -39,6 +43,8 @@ async function parseBody(request: NextRequest): Promise<{
     dropboxDestinationPath: body.dropboxDestinationPath ?? null,
     reference0: null,
     reference1: null,
+    preGenRef0: null,
+    preGenRef1: null,
   };
 }
 
@@ -84,7 +90,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { name, model, config, dropboxSourcePath, dropboxDestinationPath, reference0, reference1 } = await parseBody(request);
+  const { name, model, config, dropboxSourcePath, dropboxDestinationPath, reference0, reference1, preGenRef0, preGenRef1 } = await parseBody(request);
 
   if (!name) {
     return NextResponse.json({ error: "name is required" }, { status: 400 });
@@ -136,11 +142,40 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  let preGenRefs: string[] = [];
+  const preGenFiles = [
+    preGenRef0 && preGenRef0.size > 0 ? preGenRef0 : null,
+    preGenRef1 && preGenRef1.size > 0 ? preGenRef1 : null,
+  ];
+  for (let i = 0; i < preGenFiles.length; i++) {
+    const file = preGenFiles[i];
+    if (!file) continue;
+    const err = validateFile(file);
+    if (err) {
+      await prisma.template.delete({ where: { id: template.id } });
+      return NextResponse.json({ error: err }, { status: 400 });
+    }
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const key = await uploadPreGenReferenceImage(userId, template.id, {
+      buffer,
+      mimetype: file.type,
+      originalName: file.name,
+    });
+    if (key) preGenRefs.push(key);
+  }
+
+  const preGenConfig = (configObj as { preGen?: { prompt?: string } }).preGen;
+  const preGenPrompt = typeof preGenConfig?.prompt === "string" ? preGenConfig.prompt : "";
+  const preGen = preGenPrompt || preGenRefs.length > 0
+    ? { prompt: preGenPrompt, referenceImageUrls: preGenRefs }
+    : undefined;
+
   const finalRefs = refs.filter(Boolean);
-  const updatedConfig = { ...(configObj as object), referenceImageUrls: finalRefs };
+  const updatedConfig: Record<string, unknown> = { ...(configObj as object), referenceImageUrls: finalRefs };
+  if (preGen) updatedConfig.preGen = preGen;
   await prisma.template.update({
     where: { id: template.id },
-    data: { config: updatedConfig },
+    data: { config: updatedConfig as object },
   });
 
   const updated = await prisma.template.findUnique({

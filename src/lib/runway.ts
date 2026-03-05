@@ -152,3 +152,92 @@ export async function downloadRunwayVideo(
     return null;
   }
 }
+
+/** Ratio for text_to_image gen4_image_turbo (subset used for consistency with video). */
+export type RunwayTextToImageRatio = "1280:720" | "720:1280";
+
+/**
+ * Start text-to-image generation (POST /v1/text_to_image).
+ * model gen4_image_turbo: promptText, ratio, referenceImages (1–3) required.
+ * Optional tag per ref (e.g. "character" for Dropbox upload); contentModeration.publicFigureThreshold "low".
+ */
+export async function startRunwayTextToImage(
+  apiKey: string,
+  params: {
+    promptText: string;
+    ratio: RunwayTextToImageRatio;
+    referenceImages: { uri: string; tag?: string }[];
+  }
+): Promise<{ taskId: string } | { error: string }> {
+  if (params.referenceImages.length < 1 || params.referenceImages.length > 3) {
+    return { error: "referenceImages must have 1 to 3 items" };
+  }
+
+  const res = await fetch(`${RUNWAY_API_BASE}/v1/text_to_image`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "X-Runway-Version": RUNWAY_VERSION,
+    },
+    body: JSON.stringify({
+      model: "gen4_image_turbo",
+      promptText: params.promptText,
+      ratio: params.ratio,
+      referenceImages: params.referenceImages,
+      contentModeration: { publicFigureThreshold: "low" as const },
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    const isRateLimit = res.status === 429;
+    return {
+      error: isRateLimit ? "rate_limit" : text || `Runway API ${res.status}`,
+    };
+  }
+
+  let data: { id?: string };
+  try {
+    data = await res.json();
+  } catch {
+    return { error: "Invalid Runway response" };
+  }
+
+  const taskId = data.id;
+  if (!taskId || typeof taskId !== "string") {
+    return { error: "No task id in Runway response" };
+  }
+  return { taskId };
+}
+
+/** Poll interval and max wait for image task (pre-gen step). */
+const IMAGE_TASK_POLL_MS = 3000;
+const IMAGE_TASK_MAX_WAIT_MS = 120_000;
+
+/**
+ * Run text-to-image, poll until done, return output image URL or error.
+ */
+export async function runRunwayTextToImageAndWait(
+  apiKey: string,
+  params: {
+    promptText: string;
+    ratio: RunwayTextToImageRatio;
+    referenceImages: { uri: string; tag?: string }[];
+  }
+): Promise<{ imageUri: string } | { error: string }> {
+  const start = await startRunwayTextToImage(apiKey, params);
+  if ("error" in start) return start;
+
+  const deadline = Date.now() + IMAGE_TASK_MAX_WAIT_MS;
+  while (Date.now() < deadline) {
+    const status = await getRunwayTaskStatus(apiKey, start.taskId);
+    if (status.done) {
+      if (status.error) return { error: status.error };
+      if (status.videoUri) return { imageUri: status.videoUri };
+      return { error: "No output URL in Runway response" };
+    }
+    await new Promise((r) => setTimeout(r, IMAGE_TASK_POLL_MS));
+  }
+  return { error: "Text-to-image task timed out" };
+}
