@@ -81,7 +81,7 @@ export async function getPresignedUrl(key: string): Promise<string | null> {
   }
 }
 
-/** Get object body as Buffer (e.g. for sending to Veo). Returns null if missing or error. */
+/** Get object body as Buffer. Returns null if missing or error. */
 export async function getObjectBody(key: string): Promise<Buffer | null> {
   const client = getClient();
   if (!client || !bucket) return null;

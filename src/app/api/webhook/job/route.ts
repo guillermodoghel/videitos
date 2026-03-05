@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { downloadVeoVideo } from "@/lib/veo";
 import { downloadRunwayVideo } from "@/lib/runway";
 import { isRunwayImageToVideoModel } from "@/lib/video-models";
 import { getValidAccessToken, uploadFile } from "@/lib/dropbox";
 
 /**
  * POST /api/webhook/job
- * Callback from Step Function when video generation (Veo or Runway) is ready or failed.
+ * Callback when Runway video generation is ready or failed.
  * Body: { status: "ready" | "error", videoUri?, error?, operationName?, jobId? }
- * - ready: find job (by jobId or operationName), download video, upload to template's Dropbox destination, mark completed.
+ * - ready: find job, download video from Runway, upload to Dropbox, mark completed.
  * - error: mark job failed with errorMessage.
  */
 export async function POST(request: NextRequest) {
@@ -65,7 +64,7 @@ export async function POST(request: NextRequest) {
   const [user, template] = await Promise.all([
     prisma.user.findUnique({
       where: { id: job.userId },
-      select: { googleAiStudioApiKey: true, runwayApiKey: true },
+      select: { runwayApiKey: true },
     }),
     prisma.template.findUnique({
       where: { id: job.templateId },
@@ -74,15 +73,19 @@ export async function POST(request: NextRequest) {
   ]);
 
   const isRunway = template ? isRunwayImageToVideoModel(template.model) : false;
-  const apiKey = isRunway ? user?.runwayApiKey : user?.googleAiStudioApiKey;
+  if (!isRunway) {
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { status: "failed", errorMessage: "Unsupported model (only Runway)", completedAt: new Date() },
+    });
+    return NextResponse.json({ error: "Unsupported model" }, { status: 400 });
+  }
+
+  const apiKey = user?.runwayApiKey;
   if (!apiKey) {
     await prisma.job.update({
       where: { id: job.id },
-      data: {
-        status: "failed",
-        errorMessage: isRunway ? "User has no Runway API key" : "User has no Google API key",
-        completedAt: new Date(),
-      },
+      data: { status: "failed", errorMessage: "User has no Runway API key", completedAt: new Date() },
     });
     return NextResponse.json({ error: "No API key" }, { status: 500 });
   }
@@ -100,15 +103,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No destination path" }, { status: 500 });
   }
 
-  const videoBuffer = isRunway
-    ? await downloadRunwayVideo(apiKey, videoUri)
-    : await downloadVeoVideo(apiKey, videoUri);
+  const videoBuffer = await downloadRunwayVideo(apiKey, videoUri);
   if (!videoBuffer) {
     await prisma.job.update({
       where: { id: job.id },
       data: {
         status: "failed",
-        errorMessage: isRunway ? "Failed to download video from Runway" : "Failed to download video from Veo",
+        errorMessage: "Failed to download video from Runway",
         completedAt: new Date(),
       },
     });

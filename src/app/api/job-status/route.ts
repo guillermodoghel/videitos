@@ -1,14 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getVeoOperationStatus } from "@/lib/veo";
 import { getRunwayTaskStatus } from "@/lib/runway";
 import { isRunwayImageToVideoModel } from "@/lib/video-models";
 
 /**
  * POST /api/job-status
- * Called by Step Function (via callback Lambda). Body: { operationName, jobId? }.
- * Returns { done, videoUri? } or { done, error? } so the Step Function can branch.
- * Dispatches to Veo or Runway based on job's template model; operationName is Veo operation name or Runway task id.
+ * Returns Runway task status. Only Runway is supported (operationName = Runway task id).
  */
 export async function POST(request: NextRequest) {
   let body: { operationName?: string; jobId?: string };
@@ -39,23 +36,21 @@ export async function POST(request: NextRequest) {
       isRunway = isRunwayImageToVideoModel(job.template.model);
       const user = await prisma.user.findUnique({
         where: { id: job.userId },
-        select: { googleAiStudioApiKey: true, runwayApiKey: true },
+        select: { runwayApiKey: true },
       });
-      apiKey = isRunway ? (user?.runwayApiKey ?? null) : (user?.googleAiStudioApiKey ?? null);
+      apiKey = isRunway ? (user?.runwayApiKey ?? null) : null;
     }
   }
 
-  if (!apiKey) {
+  if (!isRunway || !apiKey) {
     return NextResponse.json(
-      { done: true, error: "Missing API key (jobId not found or user has no key)" },
+      { done: true, error: "Unsupported model or missing Runway API key" },
       { status: 200 }
     );
   }
 
   try {
-    const status = isRunway
-      ? await getRunwayTaskStatus(apiKey, operationName)
-      : await getVeoOperationStatus(apiKey, operationName);
+    const status = await getRunwayTaskStatus(apiKey, operationName);
     return NextResponse.json(status);
   } catch (e) {
     const err = e instanceof Error ? e : new Error(String(e));

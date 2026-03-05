@@ -15,15 +15,6 @@ export const RUNWAY_IMAGE_TO_VIDEO_IDS = ["gen4.5", "gen4_turbo", "veo3.1_fast"]
 
 export const VIDEO_MODELS = [
   {
-    id: "veo-3.1-fast-generate-preview",
-    name: "Veo 3.1 Fast",
-    description: "Fast video generation with native audio (8s, 720p–4K)",
-    rateLimit: {
-      requestsPerWindow: 2,
-      windowSeconds: 60,
-    } satisfies ModelRateLimit,
-  },
-  {
     id: "gen4.5",
     name: "Runway Gen-4.5",
     description: "Image-to-video from Dropbox source image (no reference images)",
@@ -122,8 +113,6 @@ export function parseTemplateConfig(modelId: string, config: unknown): VeoConfig
     if (isRunwayImageToVideoModel(modelId)) {
       base.referenceImageUrls = [];
       if (modelId === "veo3.1_fast" && typeof c.audio === "boolean") base.audio = c.audio;
-    } else if (modelId.startsWith("veo-") && Array.isArray(c.referenceImageUrls)) {
-      base.referenceImageUrls = c.referenceImageUrls.filter((u): u is string => typeof u === "string").slice(0, 2);
     }
   }
   return base;

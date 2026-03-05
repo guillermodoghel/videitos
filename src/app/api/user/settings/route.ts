@@ -10,10 +10,7 @@ export async function GET() {
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: {
-      googleAiStudioApiKey: true,
-      runwayApiKey: true,
-    },
+    select: { runwayApiKey: true },
   });
   if (!user) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
@@ -27,8 +24,6 @@ export async function GET() {
       : null;
 
   return NextResponse.json({
-    googleAiStudioApiKey: mask(user.googleAiStudioApiKey),
-    hasGoogleAiStudioApiKey: !!user.googleAiStudioApiKey,
     runwayApiKey: mask(user.runwayApiKey),
     hasRunwayApiKey: !!user.runwayApiKey,
   });
@@ -40,7 +35,7 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let body: { googleAiStudioApiKey?: string | null; runwayApiKey?: string | null };
+  let body: { runwayApiKey?: string | null };
   try {
     body = await request.json();
   } catch {
@@ -54,11 +49,9 @@ export async function PATCH(request: NextRequest) {
         ? v.trim() || null
         : null;
 
-  const googleAiStudioApiKey = trimOrNull(body.googleAiStudioApiKey);
   const runwayApiKey = trimOrNull(body.runwayApiKey);
 
-  const data: { googleAiStudioApiKey?: string | null; runwayApiKey?: string | null } = {};
-  if (body.googleAiStudioApiKey !== undefined) data.googleAiStudioApiKey = googleAiStudioApiKey;
+  const data: { runwayApiKey?: string | null } = {};
   if (body.runwayApiKey !== undefined) data.runwayApiKey = runwayApiKey;
 
   if (Object.keys(data).length === 0) {

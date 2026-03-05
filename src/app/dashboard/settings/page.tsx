@@ -1,5 +1,4 @@
 import { Suspense } from "react";
-import { GoogleAiKeyForm } from "./GoogleAiKeyForm";
 import { RunwayApiKeyForm } from "./RunwayApiKeyForm";
 import { DropboxConnect } from "./DropboxConnect";
 
@@ -9,7 +8,6 @@ export default function DashboardSettingsPage() {
       <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
         Settings
       </h1>
-      <GoogleAiKeyForm />
       <RunwayApiKeyForm />
       <Suspense fallback={<div className="text-sm text-zinc-500">Loading…</div>}>
         <DropboxConnect />
