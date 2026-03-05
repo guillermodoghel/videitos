@@ -124,6 +124,10 @@ async function createQueue(
   });
   const text = await res.text();
   if (!res.ok) {
+    if (res.status === 409) {
+      // Queue already exists (e.g. race when enqueueing many jobs for same queue)
+      return;
+    }
     const hint =
       res.status === 403
         ? " (Service account needs Cloud Tasks Admin or role with cloudtasks.queues.create to create queues.)"

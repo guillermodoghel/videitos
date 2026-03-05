@@ -5,8 +5,8 @@ import { startJobStepFunction } from "@/lib/step-function";
 /**
  * POST /api/jobs/process-task
  * Called by Google Cloud Tasks. Body: { jobId, callbackBaseUrl }.
- * Runs the job (download + Veo). On success starts Step Function to poll and callback.
- * On Veo rate limit returns 429 so Cloud Tasks retries. On other error marks job failed and returns 200.
+ * Runs the job (download + Veo/Runway). On success starts Step Function to poll and callback.
+ * Rate limit (including Runway 1-concurrent) returns 429 so Cloud Tasks retries.
  * Auth: X-Job-Process-Secret or Authorization must match JOB_PROCESS_SECRET.
  */
 export async function POST(request: NextRequest) {
@@ -34,7 +34,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "callbackBaseUrl required" }, { status: 400 });
   }
 
-  const result = await processJobToVeo(jobId, { skipRateLimit: true });
+  // Enforce rate limit (and Runway 1-concurrent) so we return 429 instead of hitting provider limit
+  const result = await processJobToVeo(jobId, { skipRateLimit: false });
 
   if (result.ok) {
     const started = await startJobStepFunction({

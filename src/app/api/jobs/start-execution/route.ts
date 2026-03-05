@@ -30,46 +30,63 @@ export async function POST(request: NextRequest) {
     body = {};
   }
 
-  let jobId = body.jobId;
-  if (!jobId || typeof jobId !== "string") {
-    if (!userId) {
-      return NextResponse.json({ error: "jobId required when not using session" }, { status: 400 });
-    }
-    const first = await prisma.job.findFirst({
-      where: { userId, status: "queued" },
-      orderBy: { createdAt: "asc" },
-      select: { id: true },
+  const host = HOSTNAME.replace(/\/$/, "");
+  const jobIdFromBody = body.jobId;
+
+  if (jobIdFromBody && typeof jobIdFromBody === "string") {
+    const job = await prisma.job.findUnique({
+      where: { id: jobIdFromBody },
+      select: { id: true, userId: true, status: true, template: { select: { model: true } } },
     });
-    if (!first) {
-      return NextResponse.json({ error: "No queued job found" }, { status: 404 });
+    if (!job) {
+      return NextResponse.json({ error: "Job not found" }, { status: 404 });
     }
-    jobId = first.id;
+    if (job.status !== "queued") {
+      return NextResponse.json({ error: `Job not queued (status: ${job.status})` }, { status: 400 });
+    }
+    if (userId && job.userId !== userId) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    const enqueued = await enqueueJobTask({
+      userId: job.userId,
+      modelId: job.template.model,
+      jobId: job.id,
+      callbackBaseUrl: host,
+    });
+    if (!enqueued) {
+      return NextResponse.json({ error: "Failed to enqueue job (check GCP config)" }, { status: 500 });
+    }
+    return NextResponse.json({ ok: true, jobId: job.id });
   }
 
-  const job = await prisma.job.findUnique({
-    where: { id: jobId },
-    select: { id: true, userId: true, status: true, template: { select: { model: true } } },
+  if (!userId) {
+    return NextResponse.json({ error: "jobId required when not using session" }, { status: 400 });
+  }
+
+  // Enqueue all queued jobs for this user so stuck jobs get another chance (Cloud Tasks processes one at a time)
+  const queued = await prisma.job.findMany({
+    where: { userId, status: "queued" },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, userId: true, template: { select: { model: true } } },
   });
-  if (!job) {
-    return NextResponse.json({ error: "Job not found" }, { status: 404 });
-  }
-  if (job.status !== "queued") {
-    return NextResponse.json({ error: `Job not queued (status: ${job.status})` }, { status: 400 });
-  }
-  if (userId && job.userId !== userId) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (queued.length === 0) {
+    return NextResponse.json({ error: "No queued job found" }, { status: 404 });
   }
 
-  const enqueued = await enqueueJobTask({
-    userId: job.userId,
-    modelId: job.template.model,
-    jobId: job.id,
-    callbackBaseUrl: HOSTNAME.replace(/\/$/, ""),
-  });
-
-  if (!enqueued) {
-    return NextResponse.json({ error: "Failed to enqueue job (check GCP config)" }, { status: 500 });
+  let enqueuedCount = 0;
+  for (const job of queued) {
+    const ok = await enqueueJobTask({
+      userId: job.userId,
+      modelId: job.template.model,
+      jobId: job.id,
+      callbackBaseUrl: host,
+    });
+    if (ok) enqueuedCount++;
   }
 
-  return NextResponse.json({ ok: true, jobId: job.id });
+  if (enqueuedCount === 0) {
+    return NextResponse.json({ error: "Failed to enqueue jobs (check GCP config)" }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true, jobIds: queued.map((j) => j.id), enqueuedCount });
 }
