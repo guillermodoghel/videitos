@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import {
   ASPECT_RATIOS,
   RESOLUTIONS,
   DURATIONS,
   VEO_DEFAULTS,
+  isRunwayImageToVideoModel,
   type VeoConfig,
 } from "@/lib/video-models";
 import { DropboxFolderPicker } from "./DropboxFolderPicker";
@@ -38,6 +39,8 @@ export function TemplateForm({
   initialDropboxDestinationPath = null,
 }: Props) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const config = initialConfig ?? VEO_DEFAULTS;
 
   const [name, setName] = useState(initialName);
@@ -64,6 +67,15 @@ export function TemplateForm({
       .then((data) => setDropboxConnected(!!data.connected))
       .catch(() => setDropboxConnected(false));
   }, []);
+
+  // After OAuth redirect with ?dropbox=connected, refetch status so folder pickers appear
+  useEffect(() => {
+    if (searchParams.get("dropbox") === "connected") {
+      fetch("/api/dropbox/status")
+        .then((res) => res.json())
+        .then((data) => setDropboxConnected(!!data.connected));
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     if (!refFile0) {
@@ -103,7 +115,7 @@ export function TemplateForm({
       aspectRatio,
       resolution,
       durationSeconds,
-      referenceImageUrls: templateId ? existingRefs : [],
+      referenceImageUrls: isRunwayImageToVideoModel(model) ? [] : (templateId ? existingRefs : []),
     };
     try {
       const url = templateId ? `/api/templates/${templateId}` : "/api/templates";
@@ -266,52 +278,54 @@ export function TemplateForm({
         </div>
       </div>
 
-      <div>
-        <span className="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-          Reference images (optional, up to 2)
-        </span>
-        <p className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
-          Upload PNG, JPEG or WebP (max 10 MB). Stored in your private S3 bucket.
-        </p>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div>
-            <label className="mb-1 block text-xs text-zinc-500 dark:text-zinc-400">
-              Reference 1
-            </label>
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/jpg,image/webp"
-              onChange={(e) => setRefFile0(e.target.files?.[0] ?? null)}
-              className={inputClass}
-            />
-            {refDisplayUrl(0) && (
-              <img
-                src={refDisplayUrl(0)!}
-                alt="Ref 1"
-                className="mt-2 max-h-32 rounded border border-zinc-200 object-contain dark:border-zinc-700"
+      {!isRunwayImageToVideoModel(model) && (
+        <div>
+          <span className="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+            Reference images (optional, up to 2)
+          </span>
+          <p className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
+            Upload PNG, JPEG or WebP (max 10 MB). Stored in your private S3 bucket.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs text-zinc-500 dark:text-zinc-400">
+                Reference 1
+              </label>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/jpg,image/webp"
+                onChange={(e) => setRefFile0(e.target.files?.[0] ?? null)}
+                className={inputClass}
               />
-            )}
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-zinc-500 dark:text-zinc-400">
-              Reference 2
-            </label>
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/jpg,image/webp"
-              onChange={(e) => setRefFile1(e.target.files?.[0] ?? null)}
-              className={inputClass}
-            />
-            {refDisplayUrl(1) && (
-              <img
-                src={refDisplayUrl(1)!}
-                alt="Ref 2"
-                className="mt-2 max-h-32 rounded border border-zinc-200 object-contain dark:border-zinc-700"
+              {refDisplayUrl(0) && (
+                <img
+                  src={refDisplayUrl(0)!}
+                  alt="Ref 1"
+                  className="mt-2 max-h-32 rounded border border-zinc-200 object-contain dark:border-zinc-700"
+                />
+              )}
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-zinc-500 dark:text-zinc-400">
+                Reference 2
+              </label>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/jpg,image/webp"
+                onChange={(e) => setRefFile1(e.target.files?.[0] ?? null)}
+                className={inputClass}
               />
-            )}
+              {refDisplayUrl(1) && (
+                <img
+                  src={refDisplayUrl(1)!}
+                  alt="Ref 2"
+                  className="mt-2 max-h-32 rounded border border-zinc-200 object-contain dark:border-zinc-700"
+                />
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       <div>
         <span className="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
@@ -321,7 +335,7 @@ export function TemplateForm({
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
             Connect Dropbox to choose a source and destination folder for this template.{" "}
             <a
-              href="/api/dropbox/auth"
+              href={`/api/dropbox/auth?returnTo=${encodeURIComponent(pathname ?? "/dashboard/templates/new")}`}
               className="inline-flex rounded-lg bg-[#0061ff] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#0052d9]"
             >
               Connect to Dropbox

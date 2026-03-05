@@ -20,12 +20,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(`${base}/dashboard/settings?dropbox_error=${encodeURIComponent("Missing code or state")}`);
   }
 
-  let userId: string;
+  let payload: { userId: string; returnTo?: string };
   try {
-    userId = await verifyDropboxState(state);
+    payload = await verifyDropboxState(state);
   } catch {
     return NextResponse.redirect(`${base}/dashboard/settings?dropbox_error=${encodeURIComponent("Invalid or expired state")}`);
   }
+
+  const { userId, returnTo } = payload;
 
   const tokens = await exchangeCodeForToken(code);
   const expiresInSec = tokens.expires_in ?? 14400;
@@ -40,5 +42,8 @@ export async function GET(request: NextRequest) {
     },
   });
 
-  return NextResponse.redirect(`${base}/dashboard/settings?dropbox=connected`);
+  const successRedirect =
+    returnTo && returnTo.startsWith("/dashboard/") ? `${base}${returnTo}` : `${base}/dashboard/settings`;
+  const sep = successRedirect.includes("?") ? "&" : "?";
+  return NextResponse.redirect(`${successRedirect}${sep}dropbox=connected`);
 }

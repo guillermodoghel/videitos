@@ -5,10 +5,11 @@
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { parseTemplateConfig, getModelRateLimit } from "@/lib/video-models";
+import { parseTemplateConfig, getModelRateLimit, isRunwayImageToVideoModel } from "@/lib/video-models";
 import { getObjectBody, isS3Key } from "@/lib/s3";
 import { getValidAccessToken, downloadFile } from "@/lib/dropbox";
 import { startVeoGeneration } from "@/lib/veo";
+import { startRunwayImageToVideo, aspectRatioToRunwayRatio } from "@/lib/runway";
 
 export type ProcessJobResult =
   | { ok: true; operationName: string }
@@ -20,7 +21,7 @@ export type ProcessJobOptions = {
 };
 
 /**
- * Run Veo for the job and update it to sent_to_veo.
+ * Run video generation (Veo or Runway) for the job and update it to processing.
  * When skipRateLimit is false, claims a rate-limit slot in DB first.
  * Returns { ok: true, operationName } or { ok: false, error }.
  * error "rate_limit" means caller should retry (e.g. return 429).
@@ -34,7 +35,7 @@ export async function processJobToVeo(
     where: { id: jobId },
     include: {
       template: true,
-      user: { select: { googleAiStudioApiKey: true } },
+      user: { select: { googleAiStudioApiKey: true, runwayApiKey: true } },
     },
   });
 
@@ -43,8 +44,8 @@ export async function processJobToVeo(
     return { ok: false, error: "Job not found" };
   }
   // Already sent or completed: let Step Function proceed to polling (no loop)
-  if (job.status === "sent_to_veo" && job.veoOperationName) {
-    console.log("[process-job] jobId=%s already sent_to_veo → operationName=%s", jobId, job.veoOperationName);
+  if (job.status === "processing" && job.veoOperationName) {
+    console.log("[process-job] jobId=%s already processing → operationName=%s", jobId, job.veoOperationName);
     return { ok: true, operationName: job.veoOperationName };
   }
   if (job.status === "completed") {
@@ -60,6 +61,7 @@ export async function processJobToVeo(
 
   if (!skipRateLimit) {
     const limit = getModelRateLimit(modelId);
+    const isRunwayModel = isRunwayImageToVideoModel(modelId);
     const windowStart = new Date(Date.now() - limit.windowSeconds * 1000);
     const RATE_LIMIT_CLAIM_RETRIES = 3;
     let claimDone = false;
@@ -67,6 +69,19 @@ export async function processJobToVeo(
       try {
         await prisma.$transaction(
           async (tx) => {
+            // Runway: only one concurrent task per user (any Runway model)
+            if (isRunwayModel) {
+              const runwayInProgress = await tx.job.count({
+                where: {
+                  userId: job.userId,
+                  status: "processing",
+                  template: { model: { in: ["gen4.5", "gen4_turbo"] } },
+                },
+              });
+              if (runwayInProgress >= 1) {
+                throw new Error("rate_limit");
+              }
+            }
             const inWindow = await tx.job.count({
               where: {
                 userId: job.userId,
@@ -115,6 +130,75 @@ export async function processJobToVeo(
     }
   }
 
+  const config = parseTemplateConfig(job.template.model, job.template.config);
+  const isRunway = isRunwayImageToVideoModel(modelId);
+
+  if (isRunway) {
+    const apiKey = job.user?.runwayApiKey;
+    if (!apiKey) {
+      console.log("[process-job] jobId=%s → No Runway API key", jobId);
+      await prisma.job.update({
+        where: { id: job.id },
+        data: { status: "failed", errorMessage: "User has no Runway API key", completedAt: new Date() },
+      });
+      return { ok: false, error: "No API key" };
+    }
+    const token = await getValidAccessToken(job.userId);
+    if (!token) {
+      console.log("[process-job] jobId=%s → Dropbox not connected", jobId);
+      await prisma.job.update({
+        where: { id: job.id },
+        data: { status: "failed", errorMessage: "Dropbox not connected", completedAt: new Date() },
+      });
+      return { ok: false, error: "Dropbox not connected" };
+    }
+    const sourcePathOrId = job.dropboxSourceFileId
+      ? job.dropboxSourceFileId.startsWith("id:")
+        ? job.dropboxSourceFileId
+        : `id:${job.dropboxSourceFileId}`
+      : job.dropboxSourceFilePath;
+    const newImageBuf = await downloadFile(token, sourcePathOrId);
+    if (!newImageBuf) {
+      console.log("[process-job] jobId=%s → Failed to download source image from Dropbox", jobId);
+      await prisma.job.update({
+        where: { id: job.id },
+        data: { status: "failed", errorMessage: "Failed to download source image from Dropbox", completedAt: new Date() },
+      });
+      return { ok: false, error: "Failed to download source image" };
+    }
+    const ext = job.dropboxSourceFilePath.split(".").pop()?.toLowerCase() ?? "jpg";
+    const newMime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+    const promptImage = `data:${newMime};base64,${newImageBuf.toString("base64")}`;
+    const result = await startRunwayImageToVideo(apiKey, {
+      model: modelId as "gen4.5" | "gen4_turbo",
+      promptText: config.prompt,
+      promptImage,
+      ratio: aspectRatioToRunwayRatio(config.aspectRatio),
+      duration: config.durationSeconds,
+    });
+    if ("error" in result) {
+      const isRateLimit = result.error === "rate_limit";
+      console.log("[process-job] jobId=%s → Runway error: %s%s", jobId, result.error, isRateLimit ? " (retry)" : "");
+      if (!isRateLimit) {
+        await prisma.job.update({
+          where: { id: job.id },
+          data: { status: "failed", errorMessage: result.error, completedAt: new Date() },
+        });
+      }
+      return { ok: false, error: result.error };
+    }
+    await prisma.job.update({
+      where: { id: job.id },
+      data: {
+        status: "processing",
+        veoOperationName: result.taskId,
+        sentToVeoAt: new Date(),
+      },
+    });
+    console.log("[process-job] jobId=%s → processing (Runway) taskId=%s", jobId, result.taskId);
+    return { ok: true, operationName: result.taskId };
+  }
+
   const apiKey = job.user?.googleAiStudioApiKey;
   if (!apiKey) {
     console.log("[process-job] jobId=%s → No API key", jobId);
@@ -125,7 +209,6 @@ export async function processJobToVeo(
     return { ok: false, error: "No API key" };
   }
 
-  const config = parseTemplateConfig(job.template.model, job.template.config);
   const refUrls = config.referenceImageUrls ?? [];
   const images: { imageBytes: string; mimeType: string }[] = [];
 
@@ -147,7 +230,6 @@ export async function processJobToVeo(
     return { ok: false, error: "Dropbox not connected" };
   }
 
-  // Prefer file ID (Dropbox returns id as "id:xxxxx"; don't double-prefix)
   const sourcePathOrId = job.dropboxSourceFileId
     ? job.dropboxSourceFileId.startsWith("id:")
       ? job.dropboxSourceFileId
@@ -192,12 +274,12 @@ export async function processJobToVeo(
   await prisma.job.update({
     where: { id: job.id },
     data: {
-      status: "sent_to_veo",
+      status: "processing",
       veoOperationName: result.operationName,
       sentToVeoAt: new Date(),
     },
   });
 
-  console.log("[process-job] jobId=%s → sent_to_veo operationName=%s", jobId, result.operationName);
+  console.log("[process-job] jobId=%s → processing operationName=%s", jobId, result.operationName);
   return { ok: true, operationName: result.operationName };
 }

@@ -91,11 +91,17 @@ function locationPath(): string {
   return `projects/${projectId}/locations/${location}`;
 }
 
-async function getQueue(accessToken: string, queueId: string): Promise<{ ok: boolean }> {
+async function getQueue(
+  accessToken: string,
+  queueId: string
+): Promise<{ exists: boolean; status: number; errorBody?: string }> {
   const res = await fetch(`https://cloudtasks.googleapis.com/v2/${queuePath(queueId)}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-  return { ok: res.ok };
+  const body = await res.text();
+  if (res.ok) return { exists: true, status: res.status };
+  if (res.status === 404) return { exists: false, status: 404 };
+  return { exists: false, status: res.status, errorBody: body };
 }
 
 async function createQueue(
@@ -103,20 +109,26 @@ async function createQueue(
   queueId: string,
   rateLimits: { maxDispatchesPerSecond: number; maxConcurrentDispatches: number }
 ): Promise<void> {
-  const res = await fetch(`https://cloudtasks.googleapis.com/v2/${locationPath()}/queues`, {
+  const url = `https://cloudtasks.googleapis.com/v2/${locationPath()}/queues`;
+  const body = JSON.stringify({
+    name: queuePath(queueId),
+    rateLimits,
+  });
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      name: queuePath(queueId),
-      rateLimits,
-    }),
+    body,
   });
+  const text = await res.text();
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Cloud Tasks createQueue failed: ${res.status} ${text}`);
+    const hint =
+      res.status === 403
+        ? " (Service account needs Cloud Tasks Admin or role with cloudtasks.queues.create to create queues.)"
+        : "";
+    throw new Error(`Cloud Tasks createQueue failed: ${res.status} ${text}${hint}`);
   }
 }
 
@@ -170,8 +182,12 @@ export async function enqueueJobTask(params: {
   try {
     const accessToken = await getAccessToken(sa);
 
-    const { ok: queueExists } = await getQueue(accessToken, queueId);
-    if (!queueExists) {
+    const queueCheck = await getQueue(accessToken, queueId);
+    if (!queueCheck.exists) {
+      if (queueCheck.status !== 404 && queueCheck.errorBody) {
+        console.warn("[CloudTasks] getQueue returned", queueCheck.status, queueCheck.errorBody);
+      }
+      console.info("[CloudTasks] Creating queue:", queueId);
       await createQueue(accessToken, queueId, {
         maxDispatchesPerSecond,
         maxConcurrentDispatches,

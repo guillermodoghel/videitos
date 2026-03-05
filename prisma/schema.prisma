@@ -18,6 +18,7 @@ model User {
   password              String
   name                  String?
   googleAiStudioApiKey  String?
+  runwayApiKey          String?
   dropboxAccessToken    String?
   dropboxRefreshToken   String?
   dropboxTokenExpiresAt DateTime?
@@ -55,7 +56,7 @@ model Job {
   user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   templateId            String
   template              Template  @relation(fields: [templateId], references: [id], onDelete: Cascade)
-  status                String    // queued | sent_to_veo | processing | completed | failed
+  status                String    // queued | processing | completed | failed
   dropboxSourceFilePath String
   dropboxSourceFileId    String?   // optional: use id for download to avoid path encoding issues
   veoOperationName      String?

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUserId } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { parseTemplateConfig } from "@/lib/video-models";
+import { parseTemplateConfig, isRunwayImageToVideoModel } from "@/lib/video-models";
 import { uploadReferenceImage } from "@/lib/s3";
 
 const ALLOWED_MIMES = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
@@ -140,7 +140,8 @@ export async function PATCH(
     config != null
       ? { ...(existing.config as object), ...(config as object) }
       : (existing.config as object);
-  const finalConfig = { ...mergedConfig, referenceImageUrls: refs };
+  const refsForModel = isRunwayImageToVideoModel(existing.model) ? [] : refs;
+  const finalConfig = { ...mergedConfig, referenceImageUrls: refsForModel };
 
   const data: { name?: string; enabled?: boolean; config?: object; dropboxSourcePath?: string | null; dropboxDestinationPath?: string | null } = {};
   if (typeof name === "string") data.name = name;

@@ -11,16 +11,18 @@ const DROPBOX_AUTH = "https://www.dropbox.com/oauth2/authorize";
 const STATE_JWT_ALG = "HS256";
 const STATE_EXP = "10m";
 
-export async function createDropboxState(userId: string): Promise<string> {
+export async function createDropboxState(userId: string, returnTo?: string | null): Promise<string> {
   const secret = process.env.SESSION_SECRET;
   if (!secret) throw new Error("SESSION_SECRET not set");
-  return new SignJWT({ userId })
+  return new SignJWT({ userId, returnTo: returnTo ?? undefined })
     .setProtectedHeader({ alg: STATE_JWT_ALG })
     .setExpirationTime(STATE_EXP)
     .sign(new TextEncoder().encode(secret));
 }
 
-export async function verifyDropboxState(state: string): Promise<string> {
+export type DropboxStatePayload = { userId: string; returnTo?: string };
+
+export async function verifyDropboxState(state: string): Promise<DropboxStatePayload> {
   const secret = process.env.SESSION_SECRET;
   if (!secret) throw new Error("SESSION_SECRET not set");
   const { payload } = await jwtVerify(
@@ -30,7 +32,8 @@ export async function verifyDropboxState(state: string): Promise<string> {
   );
   const userId = payload.userId;
   if (typeof userId !== "string") throw new Error("Invalid state");
-  return userId;
+  const returnTo = typeof payload.returnTo === "string" ? payload.returnTo : undefined;
+  return { userId, returnTo };
 }
 const DROPBOX_TOKEN = "https://api.dropbox.com/oauth2/token";
 const DROPBOX_API = "https://api.dropboxapi.com/2";

@@ -1,5 +1,5 @@
 {
-  "Comment": "Per-job: poll Veo status and callback on ready/error. Input: { callbackBaseUrl, jobId, operationName }. Job processing is done by Cloud Tasks callback.",
+  "Comment": "Per-job: poll video generation status (Veo or Runway) and callback on ready/error. Input: { callbackBaseUrl, jobId, operationName }. Job processing is done by Cloud Tasks callback.",
   "StartAt": "CheckStatus",
   "States": {
     "CheckStatus": {
@@ -9,7 +9,7 @@
         "FunctionName": "arn:aws:lambda:us-east-1:917411395508:function:callbackApiCall",
         "Payload": {
           "callbackBaseUrl.$": "$.callbackBaseUrl",
-          "apiPath": "/api/veo-status",
+          "apiPath": "/api/job-status",
           "body": {
             "operationName.$": "$.operationName",
             "jobId.$": "$.jobId"
@@ -59,7 +59,7 @@
         "FunctionName": "arn:aws:lambda:us-east-1:917411395508:function:callbackApiCall",
         "Payload": {
           "callbackBaseUrl.$": "$.callbackBaseUrl",
-          "apiPath": "/api/webhook/veo",
+          "apiPath": "/api/webhook/job",
           "body": {
             "status": "ready",
             "videoUri.$": "$.checkResult.Payload.videoUri",
@@ -77,7 +77,7 @@
         "FunctionName": "arn:aws:lambda:us-east-1:917411395508:function:callbackApiCall",
         "Payload": {
           "callbackBaseUrl.$": "$.callbackBaseUrl",
-          "apiPath": "/api/webhook/veo",
+          "apiPath": "/api/webhook/job",
           "body": {
             "status": "error",
             "error.$": "$.checkResult.Payload.error",

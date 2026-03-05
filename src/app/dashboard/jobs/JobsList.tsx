@@ -21,7 +21,7 @@ type JobDetails = {
 };
 
 const POLL_INTERVAL_MS = 5000;
-const IN_PROGRESS_STATUSES = new Set(["queued", "sent_to_veo", "processing"]);
+const IN_PROGRESS_STATUSES = new Set(["queued", "processing", "sent_to_veo"]);
 
 function formatDate(iso: string | null): string {
   if (!iso) return "—";
@@ -35,10 +35,10 @@ function formatDate(iso: string | null): string {
 function statusLabel(status: string): string {
   const labels: Record<string, string> = {
     queued: "Queued",
-    sent_to_veo: "Sent to Veo",
     processing: "Processing",
     completed: "Completed",
     failed: "Failed",
+    sent_to_veo: "Processing", // legacy, migrated to processing
   };
   return labels[status] ?? status;
 }

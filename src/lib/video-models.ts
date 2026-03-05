@@ -11,6 +11,8 @@ export interface ModelRateLimit {
   windowSeconds: number;
 }
 
+const RUNWAY_IMAGE_TO_VIDEO_IDS = ["gen4.5", "gen4_turbo"] as const;
+
 export const VIDEO_MODELS = [
   {
     id: "veo-3.1-fast-generate-preview",
@@ -21,7 +23,30 @@ export const VIDEO_MODELS = [
       windowSeconds: 60,
     } satisfies ModelRateLimit,
   },
+  {
+    id: "gen4.5",
+    name: "Runway Gen-4.5",
+    description: "Image-to-video from Dropbox source image (no reference images)",
+    rateLimit: {
+      requestsPerWindow: 1,
+      windowSeconds: 1,
+    } satisfies ModelRateLimit,
+  },
+  {
+    id: "gen4_turbo",
+    name: "Runway Gen-4 Turbo",
+    description: "Image-to-video from Dropbox source image (no reference images)",
+    rateLimit: {
+      requestsPerWindow: 1,
+      windowSeconds: 1,
+    } satisfies ModelRateLimit,
+  },
 ] as const;
+
+/** True if model uses Runway image-to-video (Dropbox image = promptImage only, no template reference images). */
+export function isRunwayImageToVideoModel(modelId: string): boolean {
+  return (RUNWAY_IMAGE_TO_VIDEO_IDS as readonly string[]).includes(modelId);
+}
 
 export type VideoModelId = (typeof VIDEO_MODELS)[number]["id"];
 
@@ -77,13 +102,15 @@ export function getModelRateLimit(modelId: string): ModelRateLimit {
 
 export function parseTemplateConfig(modelId: string, config: unknown): VeoConfig {
   const base = { ...VEO_DEFAULTS };
-  if (modelId.startsWith("veo-") && config && typeof config === "object") {
+  if (config && typeof config === "object") {
     const c = config as Record<string, unknown>;
     if (typeof c.prompt === "string") base.prompt = c.prompt;
     if (c.aspectRatio === "16:9" || c.aspectRatio === "9:16") base.aspectRatio = c.aspectRatio;
     if (c.resolution === "720p" || c.resolution === "1080p" || c.resolution === "4k") base.resolution = c.resolution;
     if (c.durationSeconds === 4 || c.durationSeconds === 6 || c.durationSeconds === 8) base.durationSeconds = c.durationSeconds;
-    if (Array.isArray(c.referenceImageUrls)) {
+    if (isRunwayImageToVideoModel(modelId)) {
+      base.referenceImageUrls = [];
+    } else if (modelId.startsWith("veo-") && Array.isArray(c.referenceImageUrls)) {
       base.referenceImageUrls = c.referenceImageUrls.filter((u): u is string => typeof u === "string").slice(0, 2);
     }
   }

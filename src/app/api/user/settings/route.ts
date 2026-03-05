@@ -12,23 +12,25 @@ export async function GET() {
     where: { id: userId },
     select: {
       googleAiStudioApiKey: true,
+      runwayApiKey: true,
     },
   });
   if (!user) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
 
-  // Return masked key for display (show only that it's set, or last 4 chars)
-  const key = user.googleAiStudioApiKey;
-  const masked = key
-    ? key.length <= 4
-      ? "••••"
-      : "••••••••" + key.slice(-4)
-    : null;
+  const mask = (key: string | null) =>
+    key
+      ? key.length <= 4
+        ? "••••"
+        : "••••••••" + key.slice(-4)
+      : null;
 
   return NextResponse.json({
-    googleAiStudioApiKey: masked,
-    hasGoogleAiStudioApiKey: !!key,
+    googleAiStudioApiKey: mask(user.googleAiStudioApiKey),
+    hasGoogleAiStudioApiKey: !!user.googleAiStudioApiKey,
+    runwayApiKey: mask(user.runwayApiKey),
+    hasRunwayApiKey: !!user.runwayApiKey,
   });
 }
 
@@ -38,24 +40,34 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let body: { googleAiStudioApiKey?: string | null };
+  let body: { googleAiStudioApiKey?: string | null; runwayApiKey?: string | null };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const value =
-    body.googleAiStudioApiKey === null ||
-    body.googleAiStudioApiKey === undefined
+  const trimOrNull = (v: unknown): string | null =>
+    v === null || v === undefined
       ? null
-      : typeof body.googleAiStudioApiKey === "string"
-        ? body.googleAiStudioApiKey.trim() || null
+      : typeof v === "string"
+        ? v.trim() || null
         : null;
+
+  const googleAiStudioApiKey = trimOrNull(body.googleAiStudioApiKey);
+  const runwayApiKey = trimOrNull(body.runwayApiKey);
+
+  const data: { googleAiStudioApiKey?: string | null; runwayApiKey?: string | null } = {};
+  if (body.googleAiStudioApiKey !== undefined) data.googleAiStudioApiKey = googleAiStudioApiKey;
+  if (body.runwayApiKey !== undefined) data.runwayApiKey = runwayApiKey;
+
+  if (Object.keys(data).length === 0) {
+    return NextResponse.json({ ok: true });
+  }
 
   await prisma.user.update({
     where: { id: userId },
-    data: { googleAiStudioApiKey: value },
+    data,
   });
 
   return NextResponse.json({ ok: true });

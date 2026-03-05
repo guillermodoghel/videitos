@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getVeoOperationStatus, downloadVeoVideo } from "@/lib/veo";
+import { downloadVeoVideo } from "@/lib/veo";
+import { downloadRunwayVideo } from "@/lib/runway";
+import { isRunwayImageToVideoModel } from "@/lib/video-models";
 import { getValidAccessToken, uploadFile } from "@/lib/dropbox";
 
 /**
- * POST /api/webhook/veo
- * Callback from Step Function when Veo is ready or failed.
+ * POST /api/webhook/job
+ * Callback from Step Function when video generation (Veo or Runway) is ready or failed.
  * Body: { status: "ready" | "error", videoUri?, error?, operationName?, jobId? }
  * - ready: find job (by jobId or operationName), download video, upload to template's Dropbox destination, mark completed.
  * - error: mark job failed with errorMessage.
@@ -60,27 +62,31 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const user = await prisma.user.findUnique({
-    where: { id: job.userId },
-    select: { googleAiStudioApiKey: true },
-  });
-  const apiKey = user?.googleAiStudioApiKey;
+  const [user, template] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: job.userId },
+      select: { googleAiStudioApiKey: true, runwayApiKey: true },
+    }),
+    prisma.template.findUnique({
+      where: { id: job.templateId },
+      select: { dropboxDestinationPath: true, model: true },
+    }),
+  ]);
+
+  const isRunway = template ? isRunwayImageToVideoModel(template.model) : false;
+  const apiKey = isRunway ? user?.runwayApiKey : user?.googleAiStudioApiKey;
   if (!apiKey) {
     await prisma.job.update({
       where: { id: job.id },
       data: {
         status: "failed",
-        errorMessage: "User has no Google API key",
+        errorMessage: isRunway ? "User has no Runway API key" : "User has no Google API key",
         completedAt: new Date(),
       },
     });
     return NextResponse.json({ error: "No API key" }, { status: 500 });
   }
 
-  const template = await prisma.template.findUnique({
-    where: { id: job.templateId },
-    select: { dropboxDestinationPath: true },
-  });
   const destPath = template?.dropboxDestinationPath;
   if (!destPath) {
     await prisma.job.update({
@@ -94,13 +100,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No destination path" }, { status: 500 });
   }
 
-  const videoBuffer = await downloadVeoVideo(apiKey, videoUri);
+  const videoBuffer = isRunway
+    ? await downloadRunwayVideo(apiKey, videoUri)
+    : await downloadVeoVideo(apiKey, videoUri);
   if (!videoBuffer) {
     await prisma.job.update({
       where: { id: job.id },
       data: {
         status: "failed",
-        errorMessage: "Failed to download video from Veo",
+        errorMessage: isRunway ? "Failed to download video from Runway" : "Failed to download video from Veo",
         completedAt: new Date(),
       },
     });
@@ -126,7 +134,7 @@ export async function POST(request: NextRequest) {
 
   const uploadResult = await uploadFile(token, outputPath, videoBuffer, { mode: "add" });
   if (!uploadResult) {
-    console.error("[webhook/veo] Upload failed", {
+    console.error("[webhook/job] Upload failed", {
       jobId: job.id,
       outputPath,
       destinationPath: destPath,

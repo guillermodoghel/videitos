@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getVeoOperationStatus } from "@/lib/veo";
+import { getRunwayTaskStatus } from "@/lib/runway";
+import { isRunwayImageToVideoModel } from "@/lib/video-models";
 
 /**
- * POST /api/veo-status
+ * POST /api/job-status
  * Called by Step Function (via callback Lambda). Body: { operationName, jobId? }.
  * Returns { done, videoUri? } or { done, error? } so the Step Function can branch.
+ * Dispatches to Veo or Runway based on job's template model; operationName is Veo operation name or Runway task id.
  */
 export async function POST(request: NextRequest) {
   let body: { operationName?: string; jobId?: string };
@@ -26,17 +29,19 @@ export async function POST(request: NextRequest) {
   }
 
   let apiKey: string | null = null;
+  let isRunway = false;
   if (jobId) {
     const job = await prisma.job.findUnique({
       where: { id: jobId },
-      select: { userId: true },
+      select: { userId: true, template: { select: { model: true } } },
     });
     if (job) {
+      isRunway = isRunwayImageToVideoModel(job.template.model);
       const user = await prisma.user.findUnique({
         where: { id: job.userId },
-        select: { googleAiStudioApiKey: true },
+        select: { googleAiStudioApiKey: true, runwayApiKey: true },
       });
-      apiKey = user?.googleAiStudioApiKey ?? null;
+      apiKey = isRunway ? (user?.runwayApiKey ?? null) : (user?.googleAiStudioApiKey ?? null);
     }
   }
 
@@ -48,11 +53,13 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const status = await getVeoOperationStatus(apiKey, operationName);
+    const status = isRunway
+      ? await getRunwayTaskStatus(apiKey, operationName)
+      : await getVeoOperationStatus(apiKey, operationName);
     return NextResponse.json(status);
   } catch (e) {
     const err = e instanceof Error ? e : new Error(String(e));
-    console.error("[veo-status] unexpected error", {
+    console.error("[job-status] unexpected error", {
       jobId,
       operationName,
       message: err.message,
@@ -61,7 +68,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         done: true,
-        error: `Veo status error: ${err.message}`,
+        error: `Status check failed: ${err.message}`,
       },
       { status: 200 }
     );
