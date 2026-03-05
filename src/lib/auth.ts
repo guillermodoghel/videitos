@@ -60,13 +60,21 @@ export async function getSessionUserId(): Promise<string | null> {
   return session.userId;
 }
 
-export async function getSessionUser() {
+export type SessionUser = {
+  id: string;
+  email: string;
+  name: string | null;
+  role: string;
+};
+
+export async function getSessionUser(): Promise<SessionUser | null> {
   const userId = await getSessionUserId();
   if (!userId) return null;
-  return prisma.user.findUnique({
+  const row = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, email: true, name: true },
+    select: { id: true, email: true, name: true, role: true },
   });
+  return row;
 }
 
 export async function destroySession(): Promise<void> {

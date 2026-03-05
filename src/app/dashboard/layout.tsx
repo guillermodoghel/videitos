@@ -34,6 +34,14 @@ export default async function DashboardLayout({
             >
               Settings
             </Link>
+            {user.role === "admin" && (
+              <Link
+                href="/dashboard/admin/users"
+                className="text-sm font-medium text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
+              >
+                Admin
+              </Link>
+            )}
           </nav>
           <div className="flex items-center gap-2">
             <ThemeToggle />
