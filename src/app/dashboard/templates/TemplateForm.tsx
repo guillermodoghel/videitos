@@ -50,6 +50,7 @@ export function TemplateForm({
   const [aspectRatio, setAspectRatio] = useState<VeoConfig["aspectRatio"]>(config.aspectRatio);
   const [resolution, setResolution] = useState<VeoConfig["resolution"]>(config.resolution);
   const [durationSeconds, setDurationSeconds] = useState<VeoConfig["durationSeconds"]>(config.durationSeconds);
+  const [runwayAudio, setRunwayAudio] = useState(config.audio ?? false);
   const [dropboxConnected, setDropboxConnected] = useState(false);
   const [dropboxSourcePath, setDropboxSourcePath] = useState(initialDropboxSourcePath ?? "");
   const [dropboxDestinationPath, setDropboxDestinationPath] = useState(initialDropboxDestinationPath ?? "");
@@ -110,13 +111,16 @@ export function TemplateForm({
     e.preventDefault();
     setError("");
     setSaving(true);
-    const configPayload = {
+    const configPayload: Record<string, unknown> = {
       prompt: prompt.trim(),
       aspectRatio,
       resolution,
       durationSeconds,
       referenceImageUrls: isRunwayImageToVideoModel(model) ? [] : (templateId ? existingRefs : []),
     };
+    if (model === "veo3.1_fast") {
+      configPayload.audio = runwayAudio;
+    }
     try {
       const url = templateId ? `/api/templates/${templateId}` : "/api/templates";
       const method = templateId ? "PATCH" : "POST";
@@ -277,6 +281,21 @@ export function TemplateForm({
           </select>
         </div>
       </div>
+
+      {model === "veo3.1_fast" && (
+        <div className="flex items-center gap-2">
+          <input
+            id="runway-audio"
+            type="checkbox"
+            checked={runwayAudio}
+            onChange={(e) => setRunwayAudio(e.target.checked)}
+            className="h-4 w-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-500 dark:border-zinc-600 dark:bg-zinc-800"
+          />
+          <label htmlFor="runway-audio" className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+            Include audio in video
+          </label>
+        </div>
+      )}
 
       {!isRunwayImageToVideoModel(model) && (
         <div>

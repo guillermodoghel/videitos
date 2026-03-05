@@ -72,7 +72,7 @@ export default function PrivacyPage() {
                 <strong>Dropbox:</strong> When you connect Dropbox, Dropbox&apos;s terms and privacy policy apply to that connection and the data we access with your consent.
               </li>
               <li>
-                <strong>Cloud and AI providers:</strong> We use cloud and AI services (e.g. Google Cloud, AWS, and video/AI APIs) for tasks such as job queues, storage, and video generation. Reference images and job parameters may be sent to these providers to perform the service.
+                <strong>Cloud and AI providers:</strong> We use cloud and AI services (e.g. Vercel, and video/AI APIs) for tasks such as job processing, storage, and video generation. Reference images and job parameters may be sent to these providers to perform the service.
               </li>
             </ul>
           </section>

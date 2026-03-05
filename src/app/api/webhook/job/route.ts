@@ -175,7 +175,7 @@ async function findJob(
   }
   if (operationName) {
     const byOp = await prisma.job.findFirst({
-      where: { veoOperationName: operationName },
+      where: { providerOperationId: operationName },
       select: { id: true, userId: true, templateId: true, dropboxSourceFilePath: true },
     });
     return byOp ?? null;

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -14,17 +15,24 @@ type TemplateRow = {
 
 export function TemplateList({ templates }: { templates: TemplateRow[] }) {
   const router = useRouter();
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
-  async function toggleEnabled(id: string, enabled: boolean) {
+  async function toggleEnabled(id: string, currentEnabled: boolean) {
+    const nextEnabled = !currentEnabled;
+    setTogglingId(id);
     try {
       const res = await fetch(`/api/templates/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: !enabled }),
+        body: JSON.stringify({ enabled: nextEnabled }),
       });
-      if (res.ok) router.refresh();
+      if (res.ok) {
+        router.refresh();
+      }
     } catch {
       // ignore
+    } finally {
+      setTogglingId(null);
     }
   }
 
@@ -75,14 +83,22 @@ export function TemplateList({ templates }: { templates: TemplateRow[] }) {
           <div className="flex items-center gap-3">
             <button
               type="button"
+              role="switch"
+              aria-checked={t.enabled}
+              aria-label={t.enabled ? "Disable template" : "Enable template"}
+              disabled={togglingId === t.id}
               onClick={() => toggleEnabled(t.id, t.enabled)}
-              className={`rounded-full px-3 py-1 text-xs font-medium ${
+              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 ${
                 t.enabled
-                  ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
-                  : "bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-400"
+                  ? "bg-green-600 dark:bg-green-500"
+                  : "bg-zinc-300 dark:bg-zinc-600"
               }`}
             >
-              {t.enabled ? "Enabled" : "Disabled"}
+              <span
+                className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                  t.enabled ? "translate-x-6" : "translate-x-0.5"
+                }`}
+              />
             </button>
             <Link
               href={`/dashboard/templates/${t.id}`}

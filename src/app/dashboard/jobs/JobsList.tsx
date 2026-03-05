@@ -1,16 +1,18 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
+import { VIDEO_MODELS } from "@/lib/video-models";
 
 type JobRow = {
   id: string;
   status: string;
   templateName: string;
+  model: string;
   dropboxSourceFilePath: string;
   outputDropboxPath: string | null;
   errorMessage: string | null;
   createdAt: string;
-  sentToVeoAt: string | null;
+  sentAt: string | null;
   completedAt: string | null;
 };
 
@@ -21,7 +23,8 @@ type JobDetails = {
 };
 
 const POLL_INTERVAL_MS = 5000;
-const IN_PROGRESS_STATUSES = new Set(["queued", "processing", "sent_to_veo"]);
+const DEFAULT_PER_PAGE = 10;
+const PER_PAGE_OPTIONS = [10, 20, 50, 100];
 
 function formatDate(iso: string | null): string {
   if (!iso) return "—";
@@ -49,6 +52,11 @@ function statusColor(status: string): string {
   if (status === "failed")
     return "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300";
   return "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300";
+}
+
+function modelLabel(modelId: string): string {
+  const m = VIDEO_MODELS.find((x) => x.id === modelId);
+  return m?.name ?? modelId;
 }
 
 function JobDetailsPanel({ job, details }: { job: JobRow; details?: JobDetails | null }) {
@@ -159,18 +167,31 @@ function JobDetailsPanel({ job, details }: { job: JobRow; details?: JobDetails |
 
 export function JobsList() {
   const [jobs, setJobs] = useState<JobRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(DEFAULT_PER_PAGE);
   const [loading, setLoading] = useState(true);
-  const [processing, setProcessing] = useState(false);
+  const [pollingEnabled, setPollingEnabled] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [detailsCache, setDetailsCache] = useState<Record<string, JobDetails>>({});
   const [detailsLoading, setDetailsLoading] = useState<string | null>(null);
 
+  const totalPages = Math.max(1, Math.ceil(total / perPage));
+  const start = total === 0 ? 0 : (page - 1) * perPage + 1;
+  const end = Math.min(page * perPage, total);
+
+  useEffect(() => {
+    if (totalPages > 0 && page > totalPages) setPage(totalPages);
+  }, [totalPages, page]);
+
   async function fetchJobs() {
     try {
-      const res = await fetch("/api/jobs");
+      const params = new URLSearchParams({ page: String(page), perPage: String(perPage) });
+      const res = await fetch(`/api/jobs?${params}`);
       if (res.ok) {
         const data = await res.json();
         setJobs(data.jobs ?? []);
+        setTotal(data.total ?? 0);
       }
     } catch {
       // keep previous state
@@ -181,31 +202,28 @@ export function JobsList() {
 
   useEffect(() => {
     fetchJobs();
-  }, []);
+  }, [page, perPage]);
 
   useEffect(() => {
-    const hasInProgress = jobs.some((j) => IN_PROGRESS_STATUSES.has(j.status));
-    if (!hasInProgress) return;
+    if (!pollingEnabled) return;
     const t = setInterval(fetchJobs, POLL_INTERVAL_MS);
     return () => clearInterval(t);
-  }, [jobs]);
+  }, [pollingEnabled, page, perPage]);
 
-  async function processQueueNow() {
-    setProcessing(true);
-    try {
-      const res = await fetch("/api/jobs/start-execution", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      if (res.ok) {
-        await fetchJobs();
-      }
-    } finally {
-      setProcessing(false);
-    }
-  }
+  // When a job that is expanded or was expanded (in cache) becomes completed, refetch its details to load the output video
+  useEffect(() => {
+    jobs.forEach((j) => {
+      if (j.status !== "completed") return;
+      const isRelevant = expandedId === j.id || detailsCache[j.id];
+      if (!isRelevant) return;
+      if (detailsCache[j.id]?.outputVideoUrl) return;
+      fetch(`/api/jobs/${j.id}/details`, { credentials: "include" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: JobDetails | null) => {
+          if (data) setDetailsCache((c) => ({ ...c, [j.id]: data }));
+        });
+    });
+  }, [jobs, expandedId, detailsCache]);
 
   function toggleExpand(jobId: string) {
     if (expandedId === jobId) {
@@ -231,24 +249,14 @@ export function JobsList() {
     );
   }
 
-  if (jobs.length === 0) {
+  if (!loading && total === 0) {
     return (
       <div className="space-y-4">
         <div className="rounded-xl border border-zinc-200 bg-white p-8 text-center dark:border-zinc-800 dark:bg-zinc-900">
-        <p className="text-zinc-600 dark:text-zinc-400">
-          No jobs yet. Jobs are created when new images appear in a template’s
-          Dropbox source folder.
-        </p>
-        </div>
-        <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={processQueueNow}
-            disabled={processing}
-            className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-          >
-            {processing ? "Processing…" : "Process queue now"}
-          </button>
+          <p className="text-zinc-600 dark:text-zinc-400">
+            No jobs yet. Jobs are created when new images appear in a template’s
+            Dropbox source folder.
+          </p>
         </div>
       </div>
     );
@@ -263,6 +271,9 @@ export function JobsList() {
               <th className="w-10 px-2 py-3" aria-label="Expand" />
               <th className="px-4 py-3 font-medium text-zinc-700 dark:text-zinc-300">
                 Template
+              </th>
+              <th className="px-4 py-3 font-medium text-zinc-700 dark:text-zinc-300">
+                Model
               </th>
               <th className="px-4 py-3 font-medium text-zinc-700 dark:text-zinc-300">
                 Status
@@ -300,6 +311,9 @@ export function JobsList() {
                   <td className="px-4 py-3 text-zinc-900 dark:text-zinc-100">
                     {j.templateName}
                   </td>
+                  <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
+                    {modelLabel(j.model)}
+                  </td>
                   <td className="px-4 py-3">
                     <span
                       className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${statusColor(j.status)}`}
@@ -316,7 +330,7 @@ export function JobsList() {
                 </tr>
                 {expandedId === j.id && (
                   <tr className="border-b border-zinc-100 bg-zinc-50/50 dark:border-zinc-700/50 dark:bg-zinc-800/30">
-                    <td colSpan={5} className="px-4 py-4">
+                    <td colSpan={6} className="px-4 py-4">
                       {detailsLoading === j.id ? (
                         <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading details…</p>
                       ) : (
@@ -330,22 +344,64 @@ export function JobsList() {
           </tbody>
         </table>
       </div>
-      <div className="flex items-center justify-between border-t border-zinc-200 px-4 py-2 dark:border-zinc-700">
-        {jobs.some((j) => IN_PROGRESS_STATUSES.has(j.status)) ? (
+      <div className="flex flex-col gap-3 border-t border-zinc-200 px-4 py-3 dark:border-zinc-700 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-3">
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Auto-refreshing every 5s while jobs are in progress.
+            {total > 0
+              ? `Showing ${start}–${end} of ${total}`
+              : "No jobs"}
           </p>
-        ) : (
-          <span />
-        )}
-        <button
-          type="button"
-          onClick={processQueueNow}
-          disabled={processing}
-          className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-        >
-          {processing ? "Processing…" : "Process queue now"}
-        </button>
+          {total > perPage && (
+            <nav className="flex items-center gap-1" aria-label="Pagination">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                className="rounded border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-700 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+              >
+                Previous
+              </button>
+              <span className="px-2 text-xs text-zinc-500 dark:text-zinc-400">
+                Page {page} of {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+                className="rounded border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-700 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+              >
+                Next
+              </button>
+            </nav>
+          )}
+          <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+            <span>Per page</span>
+            <select
+              value={perPage}
+              onChange={(e) => {
+                setPerPage(Number(e.target.value));
+                setPage(1);
+              }}
+              className="rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-zinc-700 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+            >
+              {PER_PAGE_OPTIONS.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            {pollingEnabled ? "Auto-refreshing every 5s." : "Auto-refresh paused."}
+          </p>
+          <button
+            type="button"
+            onClick={() => setPollingEnabled((p) => !p)}
+            className="text-xs font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+          >
+            {pollingEnabled ? "Pause auto-refresh" : "Resume auto-refresh"}
+          </button>
+        </div>
       </div>
     </div>
   );

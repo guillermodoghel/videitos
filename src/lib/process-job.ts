@@ -1,15 +1,15 @@
 /**
- * Core logic: rate-limit check + send job to Veo + update DB.
- * Used by claim-and-process (Step Function) and optionally by other callers.
+ * Core logic: rate-limit check + send job to provider (Veo/Runway) + update DB.
+ * Used by the job workflow (Vercel Workflow) and optionally by other callers.
  */
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { parseTemplateConfig, getModelRateLimit, isRunwayImageToVideoModel } from "@/lib/video-models";
+import { parseTemplateConfig, getModelRateLimit, isRunwayImageToVideoModel, RUNWAY_IMAGE_TO_VIDEO_IDS } from "@/lib/video-models";
 import { getObjectBody, isS3Key } from "@/lib/s3";
 import { getValidAccessToken, downloadFile } from "@/lib/dropbox";
 import { startVeoGeneration } from "@/lib/veo";
-import { startRunwayImageToVideo, aspectRatioToRunwayRatio } from "@/lib/runway";
+import { startRunwayImageToVideo, aspectRatioToRunwayRatio, type RunwayImageToVideoModel } from "@/lib/runway";
 
 export type ProcessJobResult =
   | { ok: true; operationName: string }
@@ -26,7 +26,7 @@ export type ProcessJobOptions = {
  * Returns { ok: true, operationName } or { ok: false, error }.
  * error "rate_limit" means caller should retry (e.g. return 429).
  */
-export async function processJobToVeo(
+export async function processJob(
   jobId: string,
   options: ProcessJobOptions = {}
 ): Promise<ProcessJobResult> {
@@ -43,14 +43,14 @@ export async function processJobToVeo(
     console.log("[process-job] jobId=%s → Job not found", jobId);
     return { ok: false, error: "Job not found" };
   }
-  // Already sent or completed: let Step Function proceed to polling (no loop)
-  if (job.status === "processing" && job.veoOperationName) {
-    console.log("[process-job] jobId=%s already processing → operationName=%s", jobId, job.veoOperationName);
-    return { ok: true, operationName: job.veoOperationName };
+  // Already sent or completed: let workflow proceed to polling (no loop)
+  if (job.status === "processing" && job.providerOperationId) {
+    console.log("[process-job] jobId=%s already processing → operationName=%s", jobId, job.providerOperationId);
+    return { ok: true, operationName: job.providerOperationId };
   }
   if (job.status === "completed") {
-    console.log("[process-job] jobId=%s already completed → operationName=%s", jobId, job.veoOperationName ?? "n/a");
-    return { ok: true, operationName: job.veoOperationName ?? "" };
+    console.log("[process-job] jobId=%s already completed → operationName=%s", jobId, job.providerOperationId ?? "n/a");
+    return { ok: true, operationName: job.providerOperationId ?? "" };
   }
   if (job.status !== "queued") {
     console.log("[process-job] jobId=%s → Job not queued (status=%s)", jobId, job.status);
@@ -75,7 +75,7 @@ export async function processJobToVeo(
                 where: {
                   userId: job.userId,
                   status: "processing",
-                  template: { model: { in: ["gen4.5", "gen4_turbo"] } },
+                  template: { model: { in: [...RUNWAY_IMAGE_TO_VIDEO_IDS] } },
                 },
               });
               if (runwayInProgress >= 1) {
@@ -87,7 +87,7 @@ export async function processJobToVeo(
                 userId: job.userId,
                 template: { model: modelId },
                 OR: [
-                  { sentToVeoAt: { gte: windowStart } },
+                  { sentAt: { gte: windowStart } },
                   { rateLimitClaimedAt: { gte: windowStart } },
                 ],
               },
@@ -170,11 +170,12 @@ export async function processJobToVeo(
     const newMime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
     const promptImage = `data:${newMime};base64,${newImageBuf.toString("base64")}`;
     const result = await startRunwayImageToVideo(apiKey, {
-      model: modelId as "gen4.5" | "gen4_turbo",
+      model: modelId as RunwayImageToVideoModel,
       promptText: config.prompt,
       promptImage,
       ratio: aspectRatioToRunwayRatio(config.aspectRatio),
       duration: config.durationSeconds,
+      ...(modelId === "veo3.1_fast" && { audio: config.audio === true }),
     });
     if ("error" in result) {
       const isRateLimit = result.error === "rate_limit";
@@ -191,8 +192,8 @@ export async function processJobToVeo(
       where: { id: job.id },
       data: {
         status: "processing",
-        veoOperationName: result.taskId,
-        sentToVeoAt: new Date(),
+        providerOperationId: result.taskId,
+        sentAt: new Date(),
       },
     });
     console.log("[process-job] jobId=%s → processing (Runway) taskId=%s", jobId, result.taskId);
@@ -260,9 +261,9 @@ export async function processJobToVeo(
   const result = await startVeoGeneration(apiKey, { prompt: config.prompt, config, images });
 
   if ("error" in result) {
-    const isVeoRateLimit = result.error === "rate_limit";
-    console.log("[process-job] jobId=%s → Veo error: %s%s", jobId, result.error, isVeoRateLimit ? " (retry)" : "");
-    if (!isVeoRateLimit) {
+    const isRateLimit = result.error === "rate_limit";
+    console.log("[process-job] jobId=%s → provider error: %s%s", jobId, result.error, isRateLimit ? " (retry)" : "");
+    if (!isRateLimit) {
       await prisma.job.update({
         where: { id: job.id },
         data: { status: "failed", errorMessage: result.error, completedAt: new Date() },
@@ -275,8 +276,8 @@ export async function processJobToVeo(
     where: { id: job.id },
     data: {
       status: "processing",
-      veoOperationName: result.operationName,
-      sentToVeoAt: new Date(),
+      providerOperationId: result.operationName,
+      sentAt: new Date(),
     },
   });
 

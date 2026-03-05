@@ -20,20 +20,45 @@ export function aspectRatioToRunwayRatio(
   return aspectRatio === "16:9" ? "1280:720" : "720:1280";
 }
 
+/** Runway image-to-video model ids. */
+export type RunwayImageToVideoModel = "gen4.5" | "gen4_turbo" | "veo3.1_fast";
+
+/** Ratio for gen4.5 / gen4_turbo. veo3.1_fast also supports 1080:1920, 1920:1080. */
+export type RunwayRatio = "1280:720" | "720:1280" | "1080:1920" | "1920:1080";
+
 /**
  * Start image-to-video generation. promptImage must be a data URI, HTTPS URL, or runway:// URI.
  * Returns task id for polling.
+ * veo3.1_fast: duration must be 4, 6, or 8; audio defaults to true.
  */
 export async function startRunwayImageToVideo(
   apiKey: string,
   params: {
-    model: "gen4.5" | "gen4_turbo";
+    model: RunwayImageToVideoModel;
     promptText: string;
     promptImage: string;
-    ratio: "1280:720" | "720:1280";
+    ratio: RunwayRatio;
     duration: number;
+    /** Runway Veo 3.1 Fast only: include audio (default false = muted) */
+    audio?: boolean;
   }
 ): Promise<{ taskId: string } | { error: string }> {
+  const isVeo31Fast = params.model === "veo3.1_fast";
+  const duration = isVeo31Fast
+    ? (Math.round(params.duration) === 6 ? 6 : Math.round(params.duration) === 4 ? 4 : 8) as 4 | 6 | 8
+    : (Math.min(10, Math.max(2, Math.round(params.duration))) as 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10);
+
+  const body: Record<string, unknown> = {
+    model: params.model,
+    promptText: params.promptText,
+    promptImage: params.promptImage,
+    ratio: params.ratio,
+    duration,
+  };
+  if (isVeo31Fast) {
+    body.audio = params.audio === true;
+  }
+
   const res = await fetch(`${RUNWAY_API_BASE}/v1/image_to_video`, {
     method: "POST",
     headers: {
@@ -41,13 +66,7 @@ export async function startRunwayImageToVideo(
       "Content-Type": "application/json",
       "X-Runway-Version": RUNWAY_VERSION,
     },
-    body: JSON.stringify({
-      model: params.model,
-      promptText: params.promptText,
-      promptImage: params.promptImage,
-      ratio: params.ratio,
-      duration: Math.min(10, Math.max(2, Math.round(params.duration))) as 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {

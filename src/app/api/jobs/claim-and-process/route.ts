@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { processJobToVeo } from "@/lib/process-job";
+import { processJob } from "@/lib/process-job";
 
 /**
  * POST /api/jobs/claim-and-process
  * Called by the Step Function (via callback Lambda). Body: { jobId }.
- * If rate limit allows: runs the job (Veo + update DB), returns { success: true, operationName }.
+ * If rate limit allows: runs the job (provider + update DB), returns { success: true, operationName }.
  * Otherwise returns { success: false }. Step Function will wait and retry.
  * On fatal errors we set job to failed and return { success: false, fatal: true, error } so the Step Function can callback and end.
  * Auth: x-internal-secret or Authorization must match JOB_PROCESS_SECRET.
@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const result = await processJobToVeo(jobId);
+    const result = await processJob(jobId);
 
     if (result.ok) {
       console.log("[claim-and-process] jobId=%s success → operationName=%s", jobId, result.operationName);

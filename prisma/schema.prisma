@@ -59,9 +59,9 @@ model Job {
   status                String    // queued | processing | completed | failed
   dropboxSourceFilePath String
   dropboxSourceFileId    String?   // optional: use id for download to avoid path encoding issues
-  veoOperationName      String?
-  sentToVeoAt           DateTime?
-  rateLimitClaimedAt    DateTime?   // set when claiming a rate-limit slot (before calling Veo)
+  providerOperationId   String?   // Veo operation name or Runway task id
+  sentAt                DateTime? // when job was sent to provider
+  rateLimitClaimedAt    DateTime? // set when claiming a rate-limit slot (before calling provider)
   outputDropboxPath     String?
   errorMessage          String?
   createdAt             DateTime  @default(now())

@@ -11,7 +11,7 @@ export interface ModelRateLimit {
   windowSeconds: number;
 }
 
-const RUNWAY_IMAGE_TO_VIDEO_IDS = ["gen4.5", "gen4_turbo"] as const;
+export const RUNWAY_IMAGE_TO_VIDEO_IDS = ["gen4.5", "gen4_turbo", "veo3.1_fast"] as const;
 
 export const VIDEO_MODELS = [
   {
@@ -41,6 +41,15 @@ export const VIDEO_MODELS = [
       windowSeconds: 1,
     } satisfies ModelRateLimit,
   },
+  {
+    id: "veo3.1_fast",
+    name: "Runway Veo 3.1 Fast",
+    description: "Image-to-video from Dropbox source image (4/6/8s, optional audio)",
+    rateLimit: {
+      requestsPerWindow: 1,
+      windowSeconds: 1,
+    } satisfies ModelRateLimit,
+  },
 ] as const;
 
 /** True if model uses Runway image-to-video (Dropbox image = promptImage only, no template reference images). */
@@ -58,6 +67,8 @@ export interface VeoConfig {
   durationSeconds: 4 | 6 | 8;
   /** Up to 2 reference image URLs (user-provided or uploaded) */
   referenceImageUrls?: string[];
+  /** Runway Veo 3.1 Fast only: include audio in generated video (default false = muted) */
+  audio?: boolean;
 }
 
 export const VEO_DEFAULTS: VeoConfig = {
@@ -110,6 +121,7 @@ export function parseTemplateConfig(modelId: string, config: unknown): VeoConfig
     if (c.durationSeconds === 4 || c.durationSeconds === 6 || c.durationSeconds === 8) base.durationSeconds = c.durationSeconds;
     if (isRunwayImageToVideoModel(modelId)) {
       base.referenceImageUrls = [];
+      if (modelId === "veo3.1_fast" && typeof c.audio === "boolean") base.audio = c.audio;
     } else if (modelId.startsWith("veo-") && Array.isArray(c.referenceImageUrls)) {
       base.referenceImageUrls = c.referenceImageUrls.filter((u): u is string => typeof u === "string").slice(0, 2);
     }
