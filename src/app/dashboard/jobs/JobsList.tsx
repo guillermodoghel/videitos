@@ -199,6 +199,7 @@ export function JobsList() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [detailsCache, setDetailsCache] = useState<Record<string, JobDetails>>({});
   const [detailsLoading, setDetailsLoading] = useState<string | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
 
   const totalPages = Math.max(1, Math.ceil(total / perPage));
   const start = total === 0 ? 0 : (page - 1) * perPage + 1;
@@ -233,6 +234,23 @@ export function JobsList() {
     const t = setInterval(fetchJobs, POLL_INTERVAL_MS);
     return () => clearInterval(t);
   }, [pollingEnabled, page, perPage]);
+
+  async function handleRetry(jobId: string) {
+    setRetryingId(jobId);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/retry`, { method: "POST" });
+      if (res.ok) {
+        await fetchJobs();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error ?? "Retry failed");
+      }
+    } catch {
+      alert("Retry failed");
+    } finally {
+      setRetryingId(null);
+    }
+  }
 
   // When a job that is expanded or was expanded (in cache) becomes completed, refetch its details to load the output video
   useEffect(() => {
@@ -311,6 +329,9 @@ export function JobsList() {
               <th className="px-4 py-3 font-medium text-zinc-700 dark:text-zinc-300">
                 Cost
               </th>
+              <th className="w-24 px-4 py-3 font-medium text-zinc-700 dark:text-zinc-300" aria-label="Actions">
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -363,10 +384,23 @@ export function JobsList() {
                       "—"
                     )}
                   </td>
+                  <td className="px-4 py-3">
+                    {j.status === "failed" && (
+                      <button
+                        type="button"
+                        onClick={() => handleRetry(j.id)}
+                        disabled={retryingId === j.id}
+                        className="rounded border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                        title="Retry this job"
+                      >
+                        {retryingId === j.id ? "Retrying…" : "Retry"}
+                      </button>
+                    )}
+                  </td>
                 </tr>
                 {expandedId === j.id && (
                   <tr className="border-b border-zinc-100 bg-zinc-50/50 dark:border-zinc-700/50 dark:bg-zinc-800/30">
-                    <td colSpan={6} className="px-4 py-4">
+                    <td colSpan={7} className="px-4 py-4">
                       {detailsLoading === j.id ? (
                         <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading details…</p>
                       ) : (

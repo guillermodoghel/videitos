@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
-import { startJobWorkflow } from "@/lib/start-job-workflow";
 
 /**
  * POST /api/admin/users/[id]/credits
@@ -58,30 +57,6 @@ export async function POST(
       },
     });
   });
-
-  const insufficientJobs = await prisma.job.findMany({
-    where: {
-      userId: targetUserId,
-      status: "failed",
-      errorMessage: "Insufficient credits",
-    },
-    select: { id: true },
-  });
-  if (insufficientJobs.length > 0) {
-    await prisma.job.updateMany({
-      where: {
-        id: { in: insufficientJobs.map((j) => j.id) },
-      },
-      data: { status: "queued", errorMessage: null, completedAt: null, rateLimitClaimedAt: null },
-    });
-    const baseUrl = process.env.HOSTNAME ?? process.env.VERCEL_URL ?? "http://localhost:3000";
-    const callbackBaseUrl = baseUrl.startsWith("http") ? baseUrl : `https://${baseUrl}`;
-    for (const j of insufficientJobs) {
-      startJobWorkflow({ jobId: j.id, callbackBaseUrl }).catch((err) =>
-        console.error("[admin/credits] startJobWorkflow failed for", j.id, err)
-      );
-    }
-  }
 
   const updated = await prisma.user.findUnique({
     where: { id: targetUserId },

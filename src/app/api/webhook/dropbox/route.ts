@@ -63,7 +63,7 @@ export async function POST(request: NextRequest) {
   for (const rawAccountId of accounts) {
     const accountId = typeof rawAccountId === "string" ? rawAccountId : String(rawAccountId);
     const normalized = accountId.startsWith("dbid:") ? accountId : `dbid:${accountId}`;
-    const user = await prisma.user.findFirst({
+    const users = await prisma.user.findMany({
       where: {
         dropboxAccessToken: { not: null },
         OR: [
@@ -74,41 +74,45 @@ export async function POST(request: NextRequest) {
       },
       select: { id: true },
     });
-    if (!user) {
+    if (users.length === 0) {
       console.log("[Dropbox webhook] No user for account", { accountId: accountId.slice(0, 12) });
       continue;
     }
-
-    const token = await getValidAccessToken(user.id);
-    if (!token) {
-      console.log("[Dropbox webhook] No valid token for user", { userId: user.id });
-      continue;
+    if (users.length > 1) {
+      console.log("[Dropbox webhook] Same Dropbox account linked to multiple users", { accountId: accountId.slice(0, 12), userIds: users.map((u) => u.id) });
     }
 
-    const templates = await prisma.template.findMany({
-      where: {
-        userId: user.id,
-        enabled: true,
-        dropboxSourcePath: { not: null },
-      },
-      select: {
-        id: true,
-        name: true,
-        model: true,
-        dropboxSourcePath: true,
-        dropboxSourceCursor: true,
-      },
-    });
+    for (const user of users) {
+      const token = await getValidAccessToken(user.id);
+      if (!token) {
+        console.log("[Dropbox webhook] No valid token for user", { userId: user.id });
+        continue;
+      }
 
-    console.log("[Dropbox webhook] User templates", { userId: user.id, templatesCount: templates.length, templates: templates.map((t) => ({ id: t.id, name: t.name, model: t.model, path: t.dropboxSourcePath, hasCursor: !!t.dropboxSourceCursor })) });
+      const templates = await prisma.template.findMany({
+        where: {
+          userId: user.id,
+          enabled: true,
+          dropboxSourcePath: { not: null },
+        },
+        select: {
+          id: true,
+          name: true,
+          model: true,
+          dropboxSourcePath: true,
+          dropboxSourceCursor: true,
+        },
+      });
 
-    for (const template of templates) {
-      const path = template.dropboxSourcePath!;
-      let cursor = template.dropboxSourceCursor;
-      let hasMore = true;
-      let newCursor = cursor;
+      console.log("[Dropbox webhook] User templates", { userId: user.id, templatesCount: templates.length, templates: templates.map((t) => ({ id: t.id, name: t.name, model: t.model, path: t.dropboxSourcePath, hasCursor: !!t.dropboxSourceCursor })) });
 
-      const userId = user.id;
+      for (const template of templates) {
+        const path = template.dropboxSourcePath!;
+        let cursor = template.dropboxSourceCursor;
+        let hasMore = true;
+        let newCursor = cursor;
+
+        const userId = user.id;
       async function processEntries(entries: { ".tag"?: string; name?: string; path_display?: string; id?: string }[]) {
         const list = entries ?? [];
         const fileCount = list.filter((e) => e[".tag"] === "file").length;
@@ -192,6 +196,7 @@ export async function POST(request: NextRequest) {
       } catch (err) {
         console.error(`[Dropbox webhook] Error processing template ${template.id}:`, err);
       }
+    }
     }
   }
 

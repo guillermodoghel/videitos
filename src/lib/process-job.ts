@@ -176,10 +176,15 @@ export async function processJob(
       });
       const balance = Number(job.user?.creditBalance ?? 0);
       if (balance < creditCost) {
-        console.log("[process-job] jobId=%s → Insufficient credits (balance=%s, required=%s)", jobId, balance, creditCost);
+        console.log("[process-job] jobId=%s → Insufficient credits (balance=%s, required=%s), failing job", jobId, balance, creditCost);
         await prisma.job.update({
           where: { id: job.id },
-          data: { status: "failed", errorMessage: "Insufficient credits", completedAt: new Date() },
+          data: {
+            status: "failed",
+            errorMessage: "Insufficient credits",
+            completedAt: new Date(),
+            rateLimitClaimedAt: null,
+          },
         });
         return { ok: false, error: "insufficient_credits" };
       }
