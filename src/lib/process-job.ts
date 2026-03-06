@@ -13,6 +13,7 @@ import {
   aspectRatioToRunwayRatio,
   runRunwayTextToImageAndWait,
   type RunwayImageToVideoModel,
+  type RunwayTextToImageRatio,
 } from "@/lib/runway";
 
 export type ProcessJobResult =
@@ -192,9 +193,14 @@ export async function processJob(
         return { ok: false, error: "Pre-gen refs missing" };
       }
       console.log("[process-job] jobId=%s → Pre-gen: text-to-image (%s refs, character from Dropbox)", jobId, refUris.length);
+      const imageToVideoRatio = config.runwayRatio ?? aspectRatioToRunwayRatio(config.aspectRatio);
+      const preGenRatio: RunwayTextToImageRatio =
+        imageToVideoRatio === "1280:720" || imageToVideoRatio === "720:1280"
+          ? imageToVideoRatio
+          : aspectRatioToRunwayRatio(config.aspectRatio);
       const preGenResult = await runRunwayTextToImageAndWait(apiKey, {
         promptText: preGen.prompt.trim(),
-        ratio: aspectRatioToRunwayRatio(config.aspectRatio),
+        ratio: preGenRatio,
         referenceImages: refUris,
       });
       if ("error" in preGenResult) {
@@ -242,13 +248,14 @@ export async function processJob(
       const newMime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
       promptImage = `data:${newMime};base64,${newImageBuf.toString("base64")}`;
     }
+    const ratio = config.runwayRatio ?? aspectRatioToRunwayRatio(config.aspectRatio);
     const result = await startRunwayImageToVideo(apiKey, {
       model: modelId as RunwayImageToVideoModel,
       promptText: config.prompt,
       promptImage,
-      ratio: aspectRatioToRunwayRatio(config.aspectRatio),
+      ratio,
       duration: config.durationSeconds,
-      ...(modelId === "veo3.1_fast" && { audio: config.audio === true }),
+      ...((modelId === "veo3.1" || modelId === "veo3.1_fast") && { audio: config.audio !== false }),
     });
     if ("error" in result) {
       const isRateLimit = result.error === "rate_limit";

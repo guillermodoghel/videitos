@@ -11,7 +11,25 @@ export interface ModelRateLimit {
   windowSeconds: number;
 }
 
-export const RUNWAY_IMAGE_TO_VIDEO_IDS = ["gen4.5", "gen4_turbo", "veo3.1_fast"] as const;
+export const RUNWAY_IMAGE_TO_VIDEO_IDS = ["gen4.5", "gen4_turbo", "veo3.1", "veo3.1_fast"] as const;
+
+/** Gen4.5 / Gen4 Turbo: duration 2–10, ratio from this set. */
+export const RUNWAY_GEN4_RATIOS = [
+  "1280:720",
+  "720:1280",
+  "1104:832",
+  "960:960",
+  "832:1104",
+  "1584:672",
+] as const;
+export type RunwayGen4Ratio = (typeof RUNWAY_GEN4_RATIOS)[number];
+
+/** Veo 3.1 / Veo 3.1 Fast: duration 4|6|8, ratio from this set. */
+export const RUNWAY_VEO31_RATIOS = ["1280:720", "720:1280", "1080:1920", "1920:1080"] as const;
+export type RunwayVeo31Ratio = (typeof RUNWAY_VEO31_RATIOS)[number];
+
+export const RUNWAY_GEN4_DURATIONS = [2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
+export const RUNWAY_VEO31_DURATIONS = [4, 6, 8] as const;
 
 export const VIDEO_MODELS = [
   {
@@ -27,6 +45,15 @@ export const VIDEO_MODELS = [
     id: "gen4_turbo",
     name: "Runway Gen-4 Turbo",
     description: "Image-to-video from Dropbox source image (no reference images)",
+    rateLimit: {
+      requestsPerWindow: 1,
+      windowSeconds: 1,
+    } satisfies ModelRateLimit,
+  },
+  {
+    id: "veo3.1",
+    name: "Runway Veo 3.1",
+    description: "Image-to-video from Dropbox source image (4/6/8s)",
     rateLimit: {
       requestsPerWindow: 1,
       windowSeconds: 1,
@@ -57,15 +84,23 @@ export interface PreGenConfig {
   referenceImageUrls: string[];
 }
 
+/** Runway ratio string (gen4 has 6 options, veo3.1 has 4). Stored when template uses Runway. */
+export type RunwayRatio =
+  | RunwayGen4Ratio
+  | RunwayVeo31Ratio;
+
 /** Veo 3.1 config shape (prompt, aspect ratio, resolution, duration, optional reference images) */
 export interface VeoConfig {
   prompt: string;
   aspectRatio: "9:16" | "16:9";
   resolution: "720p" | "1080p" | "4k";
-  durationSeconds: 4 | 6 | 8;
+  /** Duration in seconds. Runway Gen4: 2–10; Runway Veo 3.1: 4|6|8. */
+  durationSeconds: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
+  /** Runway image-to-video ratio (model-specific). When set, used instead of aspectRatio for Runway. */
+  runwayRatio?: RunwayRatio;
   /** Up to 2 reference image URLs (user-provided or uploaded) */
   referenceImageUrls?: string[];
-  /** Runway Veo 3.1 Fast only: include audio in generated video (default false = muted) */
+  /** Runway Veo 3.1 / 3.1 Fast: include audio in generated video (default true) */
   audio?: boolean;
   /** Optional: generate image from prompt + refs first, use that image as video first frame. */
   preGen?: PreGenConfig;
@@ -111,6 +146,14 @@ export function getModelRateLimit(modelId: string): ModelRateLimit {
   return model?.rateLimit ?? DEFAULT_RATE_LIMIT;
 }
 
+function isGen4Model(modelId: string): boolean {
+  return modelId === "gen4.5" || modelId === "gen4_turbo";
+}
+
+function isVeo31Model(modelId: string): boolean {
+  return modelId === "veo3.1" || modelId === "veo3.1_fast";
+}
+
 export function parseTemplateConfig(modelId: string, config: unknown): VeoConfig {
   const base = { ...VEO_DEFAULTS };
   if (config && typeof config === "object") {
@@ -118,10 +161,25 @@ export function parseTemplateConfig(modelId: string, config: unknown): VeoConfig
     if (typeof c.prompt === "string") base.prompt = c.prompt;
     if (c.aspectRatio === "16:9" || c.aspectRatio === "9:16") base.aspectRatio = c.aspectRatio;
     if (c.resolution === "720p" || c.resolution === "1080p" || c.resolution === "4k") base.resolution = c.resolution;
-    if (c.durationSeconds === 4 || c.durationSeconds === 6 || c.durationSeconds === 8) base.durationSeconds = c.durationSeconds;
+    const rawDuration = typeof c.durationSeconds === "number" ? c.durationSeconds : undefined;
+    if (isGen4Model(modelId) && rawDuration != null && rawDuration >= 2 && rawDuration <= 10) {
+      base.durationSeconds = Math.round(rawDuration) as VeoConfig["durationSeconds"];
+    } else if ((isVeo31Model(modelId) || !isRunwayImageToVideoModel(modelId)) && (rawDuration === 4 || rawDuration === 6 || rawDuration === 8)) {
+      base.durationSeconds = rawDuration;
+    }
+    const rawRatio = typeof c.runwayRatio === "string" ? c.runwayRatio : undefined;
+    if (rawRatio && isRunwayImageToVideoModel(modelId)) {
+      if (isGen4Model(modelId) && (RUNWAY_GEN4_RATIOS as readonly string[]).includes(rawRatio)) {
+        base.runwayRatio = rawRatio as RunwayGen4Ratio;
+      } else if (isVeo31Model(modelId) && (RUNWAY_VEO31_RATIOS as readonly string[]).includes(rawRatio)) {
+        base.runwayRatio = rawRatio as RunwayVeo31Ratio;
+      }
+    }
     if (isRunwayImageToVideoModel(modelId)) {
       base.referenceImageUrls = [];
-      if (modelId === "veo3.1_fast" && typeof c.audio === "boolean") base.audio = c.audio;
+      if (isVeo31Model(modelId)) {
+        base.audio = typeof c.audio === "boolean" ? c.audio : true;
+      }
       if (c.preGen && typeof c.preGen === "object") {
         const pg = c.preGen as Record<string, unknown>;
         const prompt = typeof pg.prompt === "string" ? pg.prompt : "";

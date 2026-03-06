@@ -8,7 +8,13 @@ import {
   DURATIONS,
   VEO_DEFAULTS,
   isRunwayImageToVideoModel,
+  RUNWAY_GEN4_RATIOS,
+  RUNWAY_VEO31_RATIOS,
+  RUNWAY_GEN4_DURATIONS,
+  RUNWAY_VEO31_DURATIONS,
   type VeoConfig,
+  type RunwayGen4Ratio,
+  type RunwayVeo31Ratio,
 } from "@/lib/video-models";
 import { DropboxFolderPicker } from "./DropboxFolderPicker";
 
@@ -50,7 +56,12 @@ export function TemplateForm({
   const [aspectRatio, setAspectRatio] = useState<VeoConfig["aspectRatio"]>(config.aspectRatio);
   const [resolution, setResolution] = useState<VeoConfig["resolution"]>(config.resolution);
   const [durationSeconds, setDurationSeconds] = useState<VeoConfig["durationSeconds"]>(config.durationSeconds);
-  const [runwayAudio, setRunwayAudio] = useState(config.audio ?? false);
+  const [runwayRatio, setRunwayRatio] = useState<string>(
+    config.runwayRatio ?? (config.aspectRatio === "16:9" ? "1280:720" : "720:1280")
+  );
+  const [runwayAudio, setRunwayAudio] = useState(
+    config.audio ?? (initialModel === "veo3.1" || initialModel === "veo3.1_fast" ? true : false)
+  );
   const [dropboxConnected, setDropboxConnected] = useState(false);
   const [dropboxSourcePath, setDropboxSourcePath] = useState(initialDropboxSourcePath ?? "");
   const [dropboxDestinationPath, setDropboxDestinationPath] = useState(initialDropboxDestinationPath ?? "");
@@ -65,6 +76,7 @@ export function TemplateForm({
   const [preGenRefFile1, setPreGenRefFile1] = useState<File | null>(null);
   const [preGenPreview0, setPreGenPreview0] = useState<string | null>(null);
   const [preGenPreview1, setPreGenPreview1] = useState<string | null>(null);
+  const [preGenExpanded, setPreGenExpanded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -83,6 +95,23 @@ export function TemplateForm({
         .then((data) => setDropboxConnected(!!data.connected));
     }
   }, [searchParams]);
+
+  const isGen4 = model === "gen4.5" || model === "gen4_turbo";
+  const isVeo31 = model === "veo3.1" || model === "veo3.1_fast";
+  const runwayRatios = isGen4 ? RUNWAY_GEN4_RATIOS : RUNWAY_VEO31_RATIOS;
+  const runwayDurations = isGen4 ? RUNWAY_GEN4_DURATIONS : RUNWAY_VEO31_DURATIONS;
+
+  useEffect(() => {
+    if (!isRunwayImageToVideoModel(model)) return;
+    const ratios = model === "gen4.5" || model === "gen4_turbo" ? RUNWAY_GEN4_RATIOS : RUNWAY_VEO31_RATIOS;
+    const durations = model === "gen4.5" || model === "gen4_turbo" ? RUNWAY_GEN4_DURATIONS : RUNWAY_VEO31_DURATIONS;
+    if (!(ratios as readonly string[]).includes(runwayRatio)) {
+      setRunwayRatio(ratios[0]);
+    }
+    if (!(durations as readonly number[]).includes(durationSeconds)) {
+      setDurationSeconds(model === "veo3.1" || model === "veo3.1_fast" ? 8 : 5);
+    }
+  }, [model]);
 
   useEffect(() => {
     if (!refFile0) {
@@ -147,13 +176,16 @@ export function TemplateForm({
     setError("");
     setSaving(true);
     const configPayload: Record<string, unknown> = {
-      prompt: prompt.trim(),
+      prompt: prompt.trim().slice(0, 1000),
       aspectRatio,
       resolution,
       durationSeconds,
       referenceImageUrls: isRunwayImageToVideoModel(model) ? [] : (templateId ? existingRefs : []),
     };
-    if (model === "veo3.1_fast") {
+    if (isRunwayImageToVideoModel(model)) {
+      configPayload.runwayRatio = runwayRatio;
+    }
+    if (model === "veo3.1" || model === "veo3.1_fast") {
       configPayload.audio = runwayAudio;
     }
     if (isRunwayImageToVideoModel(model) && (preGenPrompt.trim() || existingPreGenRefs.length > 0 || preGenRefFile0 || preGenRefFile1)) {
@@ -259,73 +291,116 @@ export function TemplateForm({
 
       <div>
         <label htmlFor="prompt" className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-          Prompt
+          Prompt <span className="text-zinc-500 dark:text-zinc-400">(1–1000 characters)</span>
         </label>
         <textarea
           id="prompt"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
+          maxLength={1000}
           rows={4}
           className={inputClass}
           placeholder="Describe the video you want to generate..."
         />
+        {prompt.length > 0 && (
+          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{prompt.length}/1000</p>
+        )}
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        <div>
-          <label htmlFor="aspectRatio" className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-            Aspect ratio
-          </label>
-          <select
-            id="aspectRatio"
-            value={aspectRatio}
-            onChange={(e) => setAspectRatio(e.target.value as VeoConfig["aspectRatio"])}
-            className={inputClass}
-          >
-            {ASPECT_RATIOS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+      {isRunwayImageToVideoModel(model) ? (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label htmlFor="runwayRatio" className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              Ratio
+            </label>
+            <select
+              id="runwayRatio"
+              value={runwayRatio}
+              onChange={(e) => setRunwayRatio(e.target.value)}
+              className={inputClass}
+            >
+              {runwayRatios.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="durationSeconds" className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              Duration
+            </label>
+            <select
+              id="durationSeconds"
+              value={durationSeconds}
+              onChange={(e) => setDurationSeconds(Number(e.target.value) as VeoConfig["durationSeconds"])}
+              className={inputClass}
+            >
+              {runwayDurations.map((d) => (
+                <option key={d} value={d}>
+                  {d} seconds
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-        <div>
-          <label htmlFor="resolution" className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-            Resolution
-          </label>
-          <select
-            id="resolution"
-            value={resolution}
-            onChange={(e) => setResolution(e.target.value as VeoConfig["resolution"])}
-            className={inputClass}
-          >
-            {RESOLUTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div>
+            <label htmlFor="aspectRatio" className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              Aspect ratio
+            </label>
+            <select
+              id="aspectRatio"
+              value={aspectRatio}
+              onChange={(e) => setAspectRatio(e.target.value as VeoConfig["aspectRatio"])}
+              className={inputClass}
+            >
+              {ASPECT_RATIOS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="resolution" className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              Resolution
+            </label>
+            <select
+              id="resolution"
+              value={resolution}
+              onChange={(e) => setResolution(e.target.value as VeoConfig["resolution"])}
+              className={inputClass}
+            >
+              {RESOLUTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="durationSeconds" className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              Duration
+            </label>
+            <select
+              id="durationSeconds"
+              value={durationSeconds}
+              onChange={(e) => setDurationSeconds(Number(e.target.value) as VeoConfig["durationSeconds"])}
+              className={inputClass}
+            >
+              {DURATIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-        <div>
-          <label htmlFor="durationSeconds" className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-            Duration
-          </label>
-          <select
-            id="durationSeconds"
-            value={durationSeconds}
-            onChange={(e) => setDurationSeconds(Number(e.target.value) as VeoConfig["durationSeconds"])}
-            className={inputClass}
-          >
-            {DURATIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
+      )}
 
-      {model === "veo3.1_fast" && (
+      {(model === "veo3.1" || model === "veo3.1_fast") && (
         <div className="flex items-center gap-2">
           <input
             id="runway-audio"
@@ -335,72 +410,81 @@ export function TemplateForm({
             className="h-4 w-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-500 dark:border-zinc-600 dark:bg-zinc-800"
           />
           <label htmlFor="runway-audio" className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-            Include audio in video
+            Include audio in video (default on)
           </label>
         </div>
       )}
 
       {isRunwayImageToVideoModel(model) && (
-        <div className="rounded-lg border border-zinc-200 bg-zinc-50/50 p-4 dark:border-zinc-700 dark:bg-zinc-800/50">
-          <span className="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+        <div className="rounded-lg border border-zinc-200 bg-zinc-50/50 dark:border-zinc-700 dark:bg-zinc-800/50">
+          <button
+            type="button"
+            onClick={() => setPreGenExpanded((e) => !e)}
+            className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-medium text-zinc-700 dark:text-zinc-300"
+          >
             Pre-generation step (optional)
-          </span>
-          <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
-            Generate an image from a prompt and reference images first; that image is then used as the first frame for the video. Leave empty to use the Dropbox input image directly.
-          </p>
-          <div className="space-y-3">
-            <div>
-              <label htmlFor="preGenPrompt" className="mb-1 block text-xs text-zinc-500 dark:text-zinc-400">
-                Image generation prompt
-              </label>
-              <textarea
-                id="preGenPrompt"
-                value={preGenPrompt}
-                onChange={(e) => setPreGenPrompt(e.target.value)}
-                rows={2}
-                className={inputClass}
-                placeholder="Describe the image to generate..."
-              />
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <span className="text-zinc-400 dark:text-zinc-500" aria-hidden>
+              {preGenExpanded ? "▼" : "▶"}
+            </span>
+          </button>
+          {preGenExpanded && (
+            <div className="space-y-3 border-t border-zinc-200 px-4 pb-4 pt-3 dark:border-zinc-700">
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                Generate an image from a prompt and reference images first; that image is then used as the first frame for the video. Leave empty to use the Dropbox input image directly.
+              </p>
               <div>
-                <label className="mb-1 block text-xs text-zinc-500 dark:text-zinc-400">
-                  Reference image 1
+                <label htmlFor="preGenPrompt" className="mb-1 block text-xs text-zinc-500 dark:text-zinc-400">
+                  Image generation prompt
                 </label>
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/jpg,image/webp"
-                  onChange={(e) => setPreGenRefFile0(e.target.files?.[0] ?? null)}
+                <textarea
+                  id="preGenPrompt"
+                  value={preGenPrompt}
+                  onChange={(e) => setPreGenPrompt(e.target.value)}
+                  rows={2}
                   className={inputClass}
+                  placeholder="Describe the image to generate..."
                 />
-                {preGenRefDisplayUrl(0) && (
-                  <img
-                    src={preGenRefDisplayUrl(0)!}
-                    alt="Pre-gen ref 1"
-                    className="mt-2 max-h-32 rounded border border-zinc-200 object-contain dark:border-zinc-700"
-                  />
-                )}
               </div>
-              <div>
-                <label className="mb-1 block text-xs text-zinc-500 dark:text-zinc-400">
-                  Reference image 2
-                </label>
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/jpg,image/webp"
-                  onChange={(e) => setPreGenRefFile1(e.target.files?.[0] ?? null)}
-                  className={inputClass}
-                />
-                {preGenRefDisplayUrl(1) && (
-                  <img
-                    src={preGenRefDisplayUrl(1)!}
-                    alt="Pre-gen ref 2"
-                    className="mt-2 max-h-32 rounded border border-zinc-200 object-contain dark:border-zinc-700"
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs text-zinc-500 dark:text-zinc-400">
+                    Reference image 1
+                  </label>
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/jpg,image/webp"
+                    onChange={(e) => setPreGenRefFile0(e.target.files?.[0] ?? null)}
+                    className={inputClass}
                   />
-                )}
+                  {preGenRefDisplayUrl(0) && (
+                    <img
+                      src={preGenRefDisplayUrl(0)!}
+                      alt="Pre-gen ref 1"
+                      className="mt-2 max-h-32 rounded border border-zinc-200 object-contain dark:border-zinc-700"
+                    />
+                  )}
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-zinc-500 dark:text-zinc-400">
+                    Reference image 2
+                  </label>
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/jpg,image/webp"
+                    onChange={(e) => setPreGenRefFile1(e.target.files?.[0] ?? null)}
+                    className={inputClass}
+                  />
+                  {preGenRefDisplayUrl(1) && (
+                    <img
+                      src={preGenRefDisplayUrl(1)!}
+                      alt="Pre-gen ref 2"
+                      className="mt-2 max-h-32 rounded border border-zinc-200 object-contain dark:border-zinc-700"
+                    />
+                  )}
+                </div>
               </div>
             </div>
-          </div>
+          )}
         </div>
       )}
 

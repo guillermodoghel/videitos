@@ -13,6 +13,8 @@ export interface RunwayTaskStatus {
   error?: string;
 }
 
+import type { RunwayRatio } from "@/lib/video-models";
+
 /** Map Veo aspect ratio to Runway ratio (image-to-video accepted values). */
 export function aspectRatioToRunwayRatio(
   aspectRatio: "9:16" | "16:9"
@@ -21,15 +23,12 @@ export function aspectRatioToRunwayRatio(
 }
 
 /** Runway image-to-video model ids. */
-export type RunwayImageToVideoModel = "gen4.5" | "gen4_turbo" | "veo3.1_fast";
-
-/** Ratio for gen4.5 / gen4_turbo. veo3.1_fast also supports 1080:1920, 1920:1080. */
-export type RunwayRatio = "1280:720" | "720:1280" | "1080:1920" | "1920:1080";
+export type RunwayImageToVideoModel = "gen4.5" | "gen4_turbo" | "veo3.1" | "veo3.1_fast";
 
 /**
  * Start image-to-video generation. promptImage must be a data URI, HTTPS URL, or runway:// URI.
  * Returns task id for polling.
- * veo3.1_fast: duration must be 4, 6, or 8; audio defaults to true.
+ * Gen4.5/Gen4 Turbo: duration 2–10, ratio from gen4 set. Veo 3.1/3.1 Fast: duration 4|6|8, ratio from veo set.
  */
 export async function startRunwayImageToVideo(
   apiKey: string,
@@ -39,24 +38,24 @@ export async function startRunwayImageToVideo(
     promptImage: string;
     ratio: RunwayRatio;
     duration: number;
-    /** Runway Veo 3.1 Fast only: include audio (default false = muted) */
+    /** Runway Veo 3.1 / 3.1 Fast: include audio (default true) */
     audio?: boolean;
   }
 ): Promise<{ taskId: string } | { error: string }> {
-  const isVeo31Fast = params.model === "veo3.1_fast";
-  const duration = isVeo31Fast
+  const isVeo31 = params.model === "veo3.1" || params.model === "veo3.1_fast";
+  const duration = isVeo31
     ? (Math.round(params.duration) === 6 ? 6 : Math.round(params.duration) === 4 ? 4 : 8) as 4 | 6 | 8
     : (Math.min(10, Math.max(2, Math.round(params.duration))) as 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10);
 
   const body: Record<string, unknown> = {
     model: params.model,
-    promptText: params.promptText,
+    promptText: params.promptText.slice(0, 1000),
     promptImage: params.promptImage,
     ratio: params.ratio,
     duration,
   };
-  if (isVeo31Fast) {
-    body.audio = params.audio === true;
+  if (params.model === "veo3.1" || params.model === "veo3.1_fast") {
+    body.audio = params.audio !== false;
   }
 
   const res = await fetch(`${RUNWAY_API_BASE}/v1/image_to_video`, {
