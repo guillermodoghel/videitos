@@ -24,11 +24,13 @@ model User {
   dropboxRefreshToken   String?
   dropboxTokenExpiresAt DateTime?
   dropboxAccountId      String?
+  creditBalance         Decimal   @default(0) @db.Decimal(14, 4) // user's credit balance
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
   sessions              Session[]
   templates             Template[]
   jobs                  Job[]
+  creditTransactions    CreditTransaction[]
 
   @@schema("videitos")
 }
@@ -66,9 +68,26 @@ model Job {
   outputDropboxPath     String?
   preGenImageKey        String?   // S3 key of pre-generation (text-to-image) output for display
   errorMessage          String?
+  apiCost               Decimal?  @db.Decimal(14, 4) // API cost (credits) when completed
+  creditCost            Decimal?  @db.Decimal(14, 4) // user credit charge when completed
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
   completedAt           DateTime?
+  creditTransactions    CreditTransaction[]
+
+  @@schema("videitos")
+}
+
+model CreditTransaction {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount      Decimal   @db.Decimal(14, 4) // positive = grant, negative = spend
+  jobId       String?   // set when amount is a spend for this job
+  job         Job?      @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  kind        String    // "grant" | "spend"
+  description String?   // e.g. "Admin grant", "Video generation"
+  createdAt   DateTime  @default(now())
 
   @@schema("videitos")
 }

@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { downloadRunwayVideo } from "@/lib/runway";
 import { isRunwayImageToVideoModel } from "@/lib/video-models";
+import { parseTemplateConfig } from "@/lib/video-models";
+import { computeJobCost } from "@/lib/credits";
+import { getRunwayApiKeyForUser, usesPlatformKey } from "@/lib/runway-api-key";
 import { getValidAccessToken, uploadFile } from "@/lib/dropbox";
 
 /**
@@ -64,11 +68,11 @@ export async function POST(request: NextRequest) {
   const [user, template] = await Promise.all([
     prisma.user.findUnique({
       where: { id: job.userId },
-      select: { runwayApiKey: true },
+      select: { runwayApiKey: true, creditBalance: true },
     }),
     prisma.template.findUnique({
       where: { id: job.templateId },
-      select: { dropboxDestinationPath: true, model: true },
+      select: { dropboxDestinationPath: true, model: true, config: true },
     }),
   ]);
 
@@ -81,11 +85,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unsupported model" }, { status: 400 });
   }
 
-  const apiKey = user?.runwayApiKey;
+  const apiKey = await getRunwayApiKeyForUser(user?.runwayApiKey ?? null);
   if (!apiKey) {
     await prisma.job.update({
       where: { id: job.id },
-      data: { status: "failed", errorMessage: "User has no Runway API key", completedAt: new Date() },
+      data: { status: "failed", errorMessage: "No Runway API key available", completedAt: new Date() },
     });
     return NextResponse.json({ error: "No API key" }, { status: 500 });
   }
@@ -151,13 +155,47 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Upload failed" }, { status: 500 });
   }
 
-  await prisma.job.update({
-    where: { id: job.id },
-    data: {
-      status: "completed",
-      outputDropboxPath: uploadResult.path_display ?? outputPath,
-      completedAt: new Date(),
-    },
+  const config = template ? parseTemplateConfig(template.model, template.config as object) : null;
+  const hasPreGen = !!job.preGenImageKey;
+  const computed = config
+    ? computeJobCost({
+        model: template!.model,
+        durationSeconds: config.durationSeconds,
+        audio: config.audio,
+        hasPreGen,
+      })
+    : { apiCost: 0, creditCost: 0 };
+  const usePlatform = usesPlatformKey(user?.runwayApiKey ?? null);
+  const deductCredits = usePlatform && computed.creditCost > 0;
+  const apiCost = usePlatform ? computed.apiCost : 0;
+  const creditCost = usePlatform ? computed.creditCost : 0;
+
+  await prisma.$transaction(async (tx) => {
+    if (deductCredits) {
+      await tx.user.update({
+        where: { id: job.userId },
+        data: { creditBalance: { decrement: new Prisma.Decimal(creditCost) } },
+      });
+      await tx.creditTransaction.create({
+        data: {
+          userId: job.userId,
+          amount: new Prisma.Decimal(-creditCost),
+          jobId: job.id,
+          kind: "spend",
+          description: "Video generation",
+        },
+      });
+    }
+    await tx.job.update({
+      where: { id: job.id },
+      data: {
+        status: "completed",
+        outputDropboxPath: uploadResult.path_display ?? outputPath,
+        completedAt: new Date(),
+        apiCost: new Prisma.Decimal(apiCost),
+        creditCost: new Prisma.Decimal(creditCost),
+      },
+    });
   });
 
   return NextResponse.json({ ok: true, outputDropboxPath: outputPath });
@@ -170,14 +208,14 @@ async function findJob(
   if (jobId) {
     const byId = await prisma.job.findUnique({
       where: { id: jobId },
-      select: { id: true, userId: true, templateId: true, dropboxSourceFilePath: true },
+      select: { id: true, userId: true, templateId: true, dropboxSourceFilePath: true, preGenImageKey: true },
     });
     if (byId) return byId;
   }
   if (operationName) {
     const byOp = await prisma.job.findFirst({
       where: { providerOperationId: operationName },
-      select: { id: true, userId: true, templateId: true, dropboxSourceFilePath: true },
+      select: { id: true, userId: true, templateId: true, dropboxSourceFilePath: true, preGenImageKey: true },
     });
     return byOp ?? null;
   }

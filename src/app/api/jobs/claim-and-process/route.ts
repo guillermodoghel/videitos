@@ -46,9 +46,11 @@ export async function POST(request: NextRequest) {
         operationName: result.operationName,
       });
     }
-    // Stop retrying: job not found (stale) or job already failed (e.g. download error)
+    // Stop retrying: job not found (stale), no API key, insufficient credits, or job already failed
     const fatal =
       result.error === "Job not found" ||
+      result.error === "No API key" ||
+      result.error === "insufficient_credits" ||
       result.error.startsWith("Job not queued (status: failed)");
     console.log("[claim-and-process] jobId=%s %s → error=%s", jobId, fatal ? "fatal" : "retry", result.error);
     return NextResponse.json(

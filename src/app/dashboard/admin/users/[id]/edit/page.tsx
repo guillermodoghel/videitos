@@ -10,16 +10,18 @@ export default async function AdminEditUserPage({
   const { id } = await params;
   const user = await prisma.user.findUnique({
     where: { id },
-    select: { id: true, email: true, name: true, role: true },
+    select: { id: true, email: true, name: true, role: true, creditBalance: true },
   });
   if (!user) notFound();
+
+  const creditBalance = Number(user.creditBalance ?? 0);
 
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
         Edit user
       </h1>
-      <EditUserForm user={user} />
+      <EditUserForm user={{ ...user, creditBalance }} />
     </div>
   );
 }

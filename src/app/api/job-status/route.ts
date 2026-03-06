@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getRunwayTaskStatus } from "@/lib/runway";
 import { isRunwayImageToVideoModel } from "@/lib/video-models";
+import { getRunwayApiKeyForUser } from "@/lib/runway-api-key";
 
 /**
  * POST /api/job-status
@@ -34,11 +35,13 @@ export async function POST(request: NextRequest) {
     });
     if (job) {
       isRunway = isRunwayImageToVideoModel(job.template.model);
-      const user = await prisma.user.findUnique({
-        where: { id: job.userId },
-        select: { runwayApiKey: true },
-      });
-      apiKey = isRunway ? (user?.runwayApiKey ?? null) : null;
+      if (isRunway) {
+        const user = await prisma.user.findUnique({
+          where: { id: job.userId },
+          select: { runwayApiKey: true },
+        });
+        apiKey = await getRunwayApiKeyForUser(user?.runwayApiKey ?? null);
+      }
     }
   }
 

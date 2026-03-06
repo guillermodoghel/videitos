@@ -44,6 +44,8 @@ export async function GET(request: NextRequest) {
     outputDropboxPath: j.outputDropboxPath,
     preGenImageKey: j.preGenImageKey ?? null,
     errorMessage: j.errorMessage,
+    apiCost: j.apiCost != null ? Number(j.apiCost) : null,
+    creditCost: j.creditCost != null ? Number(j.creditCost) : null,
     createdAt: j.createdAt.toISOString(),
     sentAt: j.sentAt?.toISOString() ?? null,
     completedAt: j.completedAt?.toISOString() ?? null,

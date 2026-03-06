@@ -29,6 +29,18 @@ export default async function DashboardLayout({
               Templates
             </Link>
             <Link
+              href="/dashboard/credits"
+              className="text-sm font-medium text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
+            >
+              Credits
+            </Link>
+            <Link
+              href="/dashboard/pricing"
+              className="text-sm font-medium text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
+            >
+              Pricing
+            </Link>
+            <Link
               href="/dashboard/settings"
               className="text-sm font-medium text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
             >

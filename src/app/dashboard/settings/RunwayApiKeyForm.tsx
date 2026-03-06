@@ -59,9 +59,11 @@ export function RunwayApiKeyForm() {
   }
 
   if (loading) {
-    return (
-      <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading…</p>
-    );
+    return null;
+  }
+
+  if (!hasKey) {
+    return null;
   }
 
   return (

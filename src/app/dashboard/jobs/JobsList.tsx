@@ -12,6 +12,8 @@ type JobRow = {
   outputDropboxPath: string | null;
   preGenImageKey: string | null;
   errorMessage: string | null;
+  apiCost: number | null;
+  creditCost: number | null;
   createdAt: string;
   sentAt: string | null;
   completedAt: string | null;
@@ -306,6 +308,9 @@ export function JobsList() {
               <th className="px-4 py-3 font-medium text-zinc-700 dark:text-zinc-300">
                 Completed
               </th>
+              <th className="px-4 py-3 font-medium text-zinc-700 dark:text-zinc-300">
+                Cost
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -348,6 +353,15 @@ export function JobsList() {
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-zinc-600 dark:text-zinc-400">
                     {formatDate(j.completedAt)}
+                  </td>
+                  <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
+                    {j.creditCost != null ? (
+                      <span title={`API: ${j.apiCost?.toFixed(2) ?? "—"} credits`}>
+                        {j.creditCost.toFixed(2)} credits
+                      </span>
+                    ) : (
+                      "—"
+                    )}
                   </td>
                 </tr>
                 {expandedId === j.id && (

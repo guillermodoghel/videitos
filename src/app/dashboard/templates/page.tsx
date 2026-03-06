@@ -2,6 +2,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getSessionUserId } from "@/lib/auth";
 import { getModelById } from "@/lib/video-models";
+import { getTemplateEstimatedCredits } from "@/lib/credits";
 import { TemplateList } from "./TemplateList";
 
 export default async function TemplatesPage() {
@@ -16,6 +17,7 @@ export default async function TemplatesPage() {
   const templatesWithModelName = templates.map((t) => ({
     ...t,
     modelLabel: getModelById(t.model)?.name ?? t.model,
+    creditsPerVideo: getTemplateEstimatedCredits(t.model, t.config),
   }));
 
   return (

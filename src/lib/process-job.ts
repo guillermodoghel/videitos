@@ -6,6 +6,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { parseTemplateConfig, getModelRateLimit, isRunwayImageToVideoModel, RUNWAY_IMAGE_TO_VIDEO_IDS } from "@/lib/video-models";
+import { computeJobCost } from "@/lib/credits";
 import { getObjectBody, isS3Key, uploadPreGenOutputImage } from "@/lib/s3";
 import { getValidAccessToken, downloadFile } from "@/lib/dropbox";
 import {
@@ -15,6 +16,7 @@ import {
   type RunwayImageToVideoModel,
   type RunwayTextToImageRatio,
 } from "@/lib/runway";
+import { getRunwayApiKeyForUser, usesPlatformKey } from "@/lib/runway-api-key";
 
 export type ProcessJobResult =
   | { ok: true; operationName: string }
@@ -40,7 +42,7 @@ export async function processJob(
     where: { id: jobId },
     include: {
       template: true,
-      user: { select: { runwayApiKey: true } },
+      user: { select: { runwayApiKey: true, creditBalance: true } },
     },
   });
 
@@ -64,6 +66,9 @@ export async function processJob(
 
   const modelId = job.template.model;
 
+  const userHasKey = !!job.user?.runwayApiKey?.trim();
+  const usePlatformKey = usesPlatformKey(job.user?.runwayApiKey ?? null);
+
   if (!skipRateLimit) {
     const limit = getModelRateLimit(modelId);
     const isRunwayModel = isRunwayImageToVideoModel(modelId);
@@ -74,39 +79,52 @@ export async function processJob(
       try {
         await prisma.$transaction(
           async (tx) => {
-            // Runway: only one concurrent task per user (any Runway model)
             if (isRunwayModel) {
-              const runwayInProgress = await tx.job.count({
-                where: {
-                  userId: job.userId,
-                  status: "processing",
-                  template: { model: { in: [...RUNWAY_IMAGE_TO_VIDEO_IDS] } },
-                },
-              });
-              if (runwayInProgress >= 1) {
-                throw new Error("rate_limit");
+              if (userHasKey) {
+                // Per-user: only one concurrent task per this user
+                const runwayInProgress = await tx.job.count({
+                  where: {
+                    userId: job.userId,
+                    status: "processing",
+                    template: { model: { in: [...RUNWAY_IMAGE_TO_VIDEO_IDS] } },
+                  },
+                });
+                if (runwayInProgress >= 1) throw new Error("rate_limit");
+              } else {
+                // Platform key: one concurrent task across all users without key
+                const platformInProgress = await tx.job.count({
+                  where: {
+                    status: "processing",
+                    user: { runwayApiKey: null },
+                    template: { model: { in: [...RUNWAY_IMAGE_TO_VIDEO_IDS] } },
+                  },
+                });
+                if (platformInProgress >= 1) throw new Error("rate_limit");
               }
             }
-            const inWindow = await tx.job.count({
-              where: {
-                userId: job.userId,
-                template: { model: modelId },
-                OR: [
-                  { sentAt: { gte: windowStart } },
-                  { rateLimitClaimedAt: { gte: windowStart } },
-                ],
-              },
-            });
-            if (inWindow >= limit.requestsPerWindow) {
-              throw new Error("rate_limit");
+            const windowWhere = {
+              template: { model: modelId },
+              OR: [
+                { sentAt: { gte: windowStart } },
+                { rateLimitClaimedAt: { gte: windowStart } },
+              ],
+            };
+            if (userHasKey) {
+              const inWindow = await tx.job.count({
+                where: { userId: job.userId, ...windowWhere },
+              });
+              if (inWindow >= limit.requestsPerWindow) throw new Error("rate_limit");
+            } else {
+              const inWindow = await tx.job.count({
+                where: { user: { runwayApiKey: null }, ...windowWhere },
+              });
+              if (inWindow >= limit.requestsPerWindow) throw new Error("rate_limit");
             }
             const updated = await tx.job.updateMany({
               where: { id: jobId, status: "queued" },
               data: { rateLimitClaimedAt: new Date() },
             });
-            if (updated.count === 0) {
-              throw new Error("rate_limit");
-            }
+            if (updated.count === 0) throw new Error("rate_limit");
           },
           {
             isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
@@ -139,14 +157,32 @@ export async function processJob(
   const isRunway = isRunwayImageToVideoModel(modelId);
 
   if (isRunway) {
-    const apiKey = job.user?.runwayApiKey;
+    const apiKey = await getRunwayApiKeyForUser(job.user?.runwayApiKey ?? null);
     if (!apiKey) {
-      console.log("[process-job] jobId=%s → No Runway API key", jobId);
+      console.log("[process-job] jobId=%s → No Runway API key (user has none and no platform key)", jobId);
       await prisma.job.update({
         where: { id: job.id },
-        data: { status: "failed", errorMessage: "User has no Runway API key", completedAt: new Date() },
+        data: { status: "failed", errorMessage: "No Runway API key. Add your key in Settings or ask an admin to add platform key.", completedAt: new Date() },
       });
       return { ok: false, error: "No API key" };
+    }
+    if (usePlatformKey) {
+      const hasPreGen = !!(config.preGen?.prompt && config.preGen.referenceImageUrls && config.preGen.referenceImageUrls.length >= 1);
+      const { creditCost } = computeJobCost({
+        model: modelId,
+        durationSeconds: config.durationSeconds,
+        audio: config.audio,
+        hasPreGen,
+      });
+      const balance = Number(job.user?.creditBalance ?? 0);
+      if (balance < creditCost) {
+        console.log("[process-job] jobId=%s → Insufficient credits (balance=%s, required=%s)", jobId, balance, creditCost);
+        await prisma.job.update({
+          where: { id: job.id },
+          data: { status: "failed", errorMessage: "Insufficient credits", completedAt: new Date() },
+        });
+        return { ok: false, error: "insufficient_credits" };
+      }
     }
     const token = await getValidAccessToken(job.userId);
     if (!token) {

@@ -16,6 +16,7 @@ import {
   type RunwayGen4Ratio,
   type RunwayVeo31Ratio,
 } from "@/lib/video-models";
+import { computeJobCost } from "@/lib/credits";
 import { DropboxFolderPicker } from "./DropboxFolderPicker";
 
 type ModelOption = { id: string; name: string; description: string };
@@ -100,6 +101,15 @@ export function TemplateForm({
   const isVeo31 = model === "veo3.1" || model === "veo3.1_fast";
   const runwayRatios = isGen4 ? RUNWAY_GEN4_RATIOS : RUNWAY_VEO31_RATIOS;
   const runwayDurations = isGen4 ? RUNWAY_GEN4_DURATIONS : RUNWAY_VEO31_DURATIONS;
+  const hasPreGen = !!(preGenPrompt.trim() || existingPreGenRefs.length > 0 || preGenRefFile0 || preGenRefFile1);
+  const estimatedCredits =
+    isRunwayImageToVideoModel(model) &&
+    computeJobCost({
+      model,
+      durationSeconds,
+      audio: runwayAudio,
+      hasPreGen,
+    }).creditCost;
 
   useEffect(() => {
     if (!isRunwayImageToVideoModel(model)) return;
@@ -344,7 +354,14 @@ export function TemplateForm({
             </select>
           </div>
         </div>
-      ) : (
+      ) : null}
+      {typeof estimatedCredits === "number" && (
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">
+          Estimated: <strong className="font-medium text-zinc-700 dark:text-zinc-300">~{estimatedCredits.toFixed(1)} credits</strong> per video
+          {hasPreGen && " (includes pre-generation image)"}
+        </p>
+      )}
+      {isRunwayImageToVideoModel(model) ? null : (
         <div className="grid gap-4 sm:grid-cols-3">
           <div>
             <label htmlFor="aspectRatio" className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">

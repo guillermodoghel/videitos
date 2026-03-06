@@ -11,6 +11,7 @@ type User = {
   email: string;
   name: string | null;
   role: string;
+  creditBalance?: number;
 };
 
 export function EditUserForm({ user }: { user: User }) {
@@ -21,6 +22,10 @@ export function EditUserForm({ user }: { user: User }) {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<{ type: "ok" | "error"; text: string } | null>(null);
+  const [grantAmount, setGrantAmount] = useState("");
+  const [granting, setGranting] = useState(false);
+  const [grantMessage, setGrantMessage] = useState<{ type: "ok" | "error"; text: string } | null>(null);
+  const [creditBalance, setCreditBalance] = useState<number>(user.creditBalance ?? 0);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -53,8 +58,39 @@ export function EditUserForm({ user }: { user: User }) {
     }
   }
 
+  async function handleGrantCredits(e: React.FormEvent) {
+    e.preventDefault();
+    const amount = parseFloat(grantAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setGrantMessage({ type: "error", text: "Enter a positive number of credits" });
+      return;
+    }
+    setGranting(true);
+    setGrantMessage(null);
+    try {
+      const res = await fetch(`/api/admin/users/${user.id}/credits`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setGrantMessage({ type: "error", text: data.error ?? "Failed to grant credits" });
+        return;
+      }
+      setCreditBalance(data.balance ?? creditBalance + amount);
+      setGrantAmount("");
+      setGrantMessage({ type: "ok", text: `Granted ${amount} credits. New balance: ${(data.balance ?? 0).toFixed(2)}.` });
+    } catch {
+      setGrantMessage({ type: "error", text: "Something went wrong" });
+    } finally {
+      setGranting(false);
+    }
+  }
+
   return (
-    <form onSubmit={handleSubmit} className="max-w-md space-y-4">
+    <div className="max-w-md space-y-8">
+    <form onSubmit={handleSubmit} className="space-y-4">
       <div>
         <label htmlFor="edit-user-email" className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
           Email
@@ -140,5 +176,46 @@ export function EditUserForm({ user }: { user: User }) {
         </button>
       </div>
     </form>
+
+      <div className="rounded-xl border border-zinc-200 bg-zinc-50/50 p-4 dark:border-zinc-700 dark:bg-zinc-800/50">
+        <h3 className="mb-2 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+          Credits
+        </h3>
+        <p className="mb-3 text-sm text-zinc-600 dark:text-zinc-400">
+          Balance: <strong>{creditBalance.toFixed(2)} credits</strong>
+        </p>
+        <form onSubmit={handleGrantCredits} className="flex flex-wrap items-end gap-2">
+          <div>
+            <label htmlFor="grant-credits" className="sr-only">
+              Credits to grant
+            </label>
+            <input
+              id="grant-credits"
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={grantAmount}
+              onChange={(e) => setGrantAmount(e.target.value)}
+              placeholder="Amount"
+              className="w-28 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={granting || !grantAmount.trim()}
+            className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+          >
+            {granting ? "Granting…" : "Grant credits"}
+          </button>
+        </form>
+        {grantMessage && (
+          <p
+            className={`mt-2 text-sm ${grantMessage.type === "ok" ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}
+          >
+            {grantMessage.text}
+          </p>
+        )}
+      </div>
+    </div>
   );
 }

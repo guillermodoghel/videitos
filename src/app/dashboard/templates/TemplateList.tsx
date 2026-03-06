@@ -11,6 +11,7 @@ type TemplateRow = {
   modelLabel: string;
   enabled: boolean;
   createdAt: Date | string;
+  creditsPerVideo: number;
 };
 
 export function TemplateList({ templates }: { templates: TemplateRow[] }) {
@@ -78,6 +79,9 @@ export function TemplateList({ templates }: { templates: TemplateRow[] }) {
             </Link>
             <p className="text-sm text-zinc-500 dark:text-zinc-400">
               {t.modelLabel}
+              <span className="ml-2 rounded bg-zinc-200 px-1.5 py-0.5 text-xs font-medium text-zinc-700 dark:bg-zinc-600 dark:text-zinc-300">
+                ~{t.creditsPerVideo.toFixed(1)} credits/video
+              </span>
             </p>
           </div>
           <div className="flex items-center gap-3">
