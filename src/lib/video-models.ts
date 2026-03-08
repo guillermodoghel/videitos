@@ -34,7 +34,7 @@ export const RUNWAY_VEO31_DURATIONS = [4, 6, 8] as const;
 export const VIDEO_MODELS = [
   {
     id: "gen4.5",
-    name: "Runway Gen-4.5",
+    name: "Gen-4.5",
     description: "Image-to-video from Dropbox source image (no reference images)",
     rateLimit: {
       requestsPerWindow: 1,
@@ -43,7 +43,7 @@ export const VIDEO_MODELS = [
   },
   {
     id: "gen4_turbo",
-    name: "Runway Gen-4 Turbo",
+    name: "Gen-4 Turbo",
     description: "Image-to-video from Dropbox source image (no reference images)",
     rateLimit: {
       requestsPerWindow: 1,
@@ -52,7 +52,7 @@ export const VIDEO_MODELS = [
   },
   {
     id: "veo3.1",
-    name: "Runway Veo 3.1",
+    name: "Veo 3.1",
     description: "Image-to-video from Dropbox source image (4/6/8s)",
     rateLimit: {
       requestsPerWindow: 1,
@@ -61,7 +61,7 @@ export const VIDEO_MODELS = [
   },
   {
     id: "veo3.1_fast",
-    name: "Runway Veo 3.1 Fast",
+    name: "Veo 3.1 Fast",
     description: "Image-to-video from Dropbox source image (4/6/8s, optional audio)",
     rateLimit: {
       requestsPerWindow: 1,

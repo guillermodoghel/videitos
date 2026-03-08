@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { USER_ROLE } from "@/lib/constants/user-role";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
 
@@ -8,7 +9,7 @@ export default async function AdminLayout({
   children: React.ReactNode;
 }) {
   const user = await getSessionUser();
-  if (!user || user.role !== "admin") {
+  if (!user || user.role !== USER_ROLE.ADMIN) {
     redirect("/dashboard");
   }
 

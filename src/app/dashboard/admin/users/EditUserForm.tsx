@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { USER_ROLE } from "@/lib/constants/user-role";
 
 const input =
   "w-full rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-zinc-900 placeholder-zinc-500 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder-zinc-400";
@@ -129,8 +130,8 @@ export function EditUserForm({ user }: { user: User }) {
           onChange={(e) => setRole(e.target.value)}
           className={input}
         >
-          <option value="user">user</option>
-          <option value="admin">admin</option>
+          <option value={USER_ROLE.USER}>user</option>
+          <option value={USER_ROLE.ADMIN}>admin</option>
         </select>
       </div>
       <div>
@@ -197,7 +198,7 @@ export function EditUserForm({ user }: { user: User }) {
               value={grantAmount}
               onChange={(e) => setGrantAmount(e.target.value)}
               placeholder="Amount"
-              className="w-28 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+              className="w-28 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:placeholder:text-zinc-400"
             />
           </div>
           <button

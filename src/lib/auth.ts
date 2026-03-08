@@ -65,6 +65,7 @@ export type SessionUser = {
   email: string;
   name: string | null;
   role: string;
+  creditBalance?: number;
 };
 
 export async function getSessionUser(): Promise<SessionUser | null> {
@@ -72,9 +73,16 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   if (!userId) return null;
   const row = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, email: true, name: true, role: true },
+    select: { id: true, email: true, name: true, role: true, creditBalance: true },
   });
-  return row;
+  if (!row) return null;
+  return {
+    id: row.id,
+    email: row.email,
+    name: row.name,
+    role: row.role,
+    creditBalance: row.creditBalance != null ? Number(row.creditBalance) : undefined,
+  };
 }
 
 export async function destroySession(): Promise<void> {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { hashPassword, getSessionUser } from "@/lib/auth";
+import { USER_ROLE } from "@/lib/constants/user-role";
 
 export async function GET(
   _request: NextRequest,
@@ -10,7 +11,7 @@ export async function GET(
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (user.role !== "admin") {
+  if (user.role !== USER_ROLE.ADMIN) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -33,7 +34,7 @@ export async function PATCH(
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (user.role !== "admin") {
+  if (user.role !== USER_ROLE.ADMIN) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -94,7 +95,7 @@ export async function PATCH(
 
   if (body.role !== undefined) {
     const role = typeof body.role === "string" ? body.role.trim() : "";
-    if (role !== "user" && role !== "admin") {
+    if (role !== USER_ROLE.USER && role !== USER_ROLE.ADMIN) {
       return NextResponse.json(
         { error: "role must be 'user' or 'admin'" },
         { status: 400 }

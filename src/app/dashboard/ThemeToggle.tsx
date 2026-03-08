@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 
 const STORAGE_KEY = "videitos-theme";
 
-function useTheme() {
+export function useTheme() {
   const [theme, setThemeState] = useState<"light" | "dark">("light");
   const [mounted, setMounted] = useState(false);
 

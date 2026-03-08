@@ -52,7 +52,7 @@ export function PricingPageContent() {
             <tbody className="divide-y divide-zinc-100 dark:divide-zinc-700/50">
               <tr>
                 <td className="px-4 py-3 font-medium text-zinc-900 dark:text-zinc-100">
-                  Runway Gen-4.5
+                  Gen-4.5
                 </td>
                 <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
                   {formatCredits(12 * CREDIT_MULTIPLIER)}
@@ -60,7 +60,7 @@ export function PricingPageContent() {
               </tr>
               <tr>
                 <td className="px-4 py-3 font-medium text-zinc-900 dark:text-zinc-100">
-                  Runway Gen-4 Turbo
+                  Gen-4 Turbo
                 </td>
                 <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
                   {formatCredits(5 * CREDIT_MULTIPLIER)}
@@ -68,7 +68,7 @@ export function PricingPageContent() {
               </tr>
               <tr>
                 <td className="px-4 py-3 font-medium text-zinc-900 dark:text-zinc-100">
-                  Runway Veo 3.1 (with audio)
+                  Veo 3.1 (with audio)
                 </td>
                 <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
                   {formatCredits(40 * CREDIT_MULTIPLIER)}
@@ -76,7 +76,7 @@ export function PricingPageContent() {
               </tr>
               <tr>
                 <td className="px-4 py-3 font-medium text-zinc-900 dark:text-zinc-100">
-                  Runway Veo 3.1 (no audio)
+                  Veo 3.1 (no audio)
                 </td>
                 <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
                   {formatCredits(20 * CREDIT_MULTIPLIER)}
@@ -84,7 +84,7 @@ export function PricingPageContent() {
               </tr>
               <tr>
                 <td className="px-4 py-3 font-medium text-zinc-900 dark:text-zinc-100">
-                  Runway Veo 3.1 Fast (with audio)
+                  Veo 3.1 Fast (with audio)
                 </td>
                 <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
                   {formatCredits(15 * CREDIT_MULTIPLIER)}
@@ -92,7 +92,7 @@ export function PricingPageContent() {
               </tr>
               <tr>
                 <td className="px-4 py-3 font-medium text-zinc-900 dark:text-zinc-100">
-                  Runway Veo 3.1 Fast (no audio)
+                  Veo 3.1 Fast (no audio)
                 </td>
                 <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
                   {formatCredits(10 * CREDIT_MULTIPLIER)}

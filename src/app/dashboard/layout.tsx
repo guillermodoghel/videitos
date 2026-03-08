@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
-import { ThemeToggle } from "./ThemeToggle";
+import { NavUserMenu } from "./NavUserMenu";
+import { USER_ROLE } from "@/lib/constants/user-role";
 
 export default async function DashboardLayout({
   children,
@@ -13,62 +14,52 @@ export default async function DashboardLayout({
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
-      <header className="border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="mx-auto flex h-14 max-w-4xl items-center justify-between px-4">
-          <nav className="flex items-center gap-6">
+      <header className="sticky top-0 z-40 border-b border-zinc-200 bg-white/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:border-zinc-800 dark:bg-zinc-900/95 dark:supports-[backdrop-filter]:dark:bg-zinc-900/80">
+        <div className="mx-auto flex h-14 max-w-4xl items-center justify-between gap-4 px-4">
+          <nav className="flex items-center gap-1">
             <Link
               href="/dashboard"
-              className="text-sm font-medium text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
+              className="rounded-md px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
             >
               Jobs
             </Link>
             <Link
               href="/dashboard/templates"
-              className="text-sm font-medium text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
+              className="rounded-md px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
             >
               Templates
             </Link>
             <Link
               href="/dashboard/credits"
-              className="text-sm font-medium text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
+              className="rounded-md px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
             >
               Credits
             </Link>
             <Link
               href="/dashboard/pricing"
-              className="text-sm font-medium text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
+              className="rounded-md px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
             >
               Pricing
             </Link>
             <Link
               href="/dashboard/settings"
-              className="text-sm font-medium text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
+              className="rounded-md px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
             >
               Settings
             </Link>
-            {user.role === "admin" && (
+            {user.role === USER_ROLE.ADMIN && (
               <Link
                 href="/dashboard/admin/users"
-                className="text-sm font-medium text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
+                className="rounded-md px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
               >
                 Admin
               </Link>
             )}
           </nav>
-          <div className="flex items-center gap-2">
-            <ThemeToggle />
-            <span className="text-sm text-zinc-500 dark:text-zinc-400">
-              {user.email}
-            </span>
-            <form action="/api/auth/logout" method="POST">
-              <button
-                type="submit"
-                className="text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-              >
-                Log out
-              </button>
-            </form>
-          </div>
+          <NavUserMenu
+            email={user.email}
+            creditBalance={user.creditBalance}
+          />
         </div>
       </header>
       <main className="mx-auto max-w-4xl px-4 py-8">{children}</main>

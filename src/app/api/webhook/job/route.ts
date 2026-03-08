@@ -7,6 +7,11 @@ import { parseTemplateConfig } from "@/lib/video-models";
 import { computeJobCost } from "@/lib/credits";
 import { getRunwayApiKeyForUser, usesPlatformKey } from "@/lib/runway-api-key";
 import { getValidAccessToken, uploadFile } from "@/lib/dropbox";
+import { maybeAutoRecharge } from "@/lib/stripe";
+import { JOB_STATUS } from "@/lib/constants/job-status";
+import { WEBHOOK_JOB_STATUS } from "@/lib/constants/webhook-job-status";
+import { JOB_ERROR } from "@/lib/constants/job-error-messages";
+import { CREDIT_KIND } from "@/lib/constants/credit-transaction-kind";
 
 /**
  * POST /api/webhook/job
@@ -35,13 +40,13 @@ export async function POST(request: NextRequest) {
   const operationName = body.operationName;
   const jobId = body.jobId;
 
-  if (status === "error") {
+  if (status === WEBHOOK_JOB_STATUS.ERROR) {
     const job = await findJob(jobId, operationName);
     if (job) {
       await prisma.job.update({
         where: { id: job.id },
         data: {
-          status: "failed",
+          status: JOB_STATUS.FAILED,
           errorMessage: errorMsg ?? "Unknown error",
           completedAt: new Date(),
         },
@@ -50,7 +55,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  if (status !== "ready" || !videoUri) {
+  if (status !== WEBHOOK_JOB_STATUS.READY || !videoUri) {
     return NextResponse.json(
       { error: "status ready requires videoUri" },
       { status: 400 }
@@ -80,7 +85,7 @@ export async function POST(request: NextRequest) {
   if (!isRunway) {
     await prisma.job.update({
       where: { id: job.id },
-      data: { status: "failed", errorMessage: "Unsupported model (only Runway)", completedAt: new Date() },
+      data: { status: JOB_STATUS.FAILED, errorMessage: "Unsupported model (only Runway)", completedAt: new Date() },
     });
     return NextResponse.json({ error: "Unsupported model" }, { status: 400 });
   }
@@ -89,7 +94,7 @@ export async function POST(request: NextRequest) {
   if (!apiKey) {
     await prisma.job.update({
       where: { id: job.id },
-      data: { status: "failed", errorMessage: "No Runway API key available", completedAt: new Date() },
+      data: { status: JOB_STATUS.FAILED, errorMessage: JOB_ERROR.NO_RUNWAY_API_KEY, completedAt: new Date() },
     });
     return NextResponse.json({ error: "No API key" }, { status: 500 });
   }
@@ -99,7 +104,7 @@ export async function POST(request: NextRequest) {
     await prisma.job.update({
       where: { id: job.id },
       data: {
-        status: "failed",
+        status: JOB_STATUS.FAILED,
         errorMessage: "Template has no Dropbox destination",
         completedAt: new Date(),
       },
@@ -112,7 +117,7 @@ export async function POST(request: NextRequest) {
     await prisma.job.update({
       where: { id: job.id },
       data: {
-        status: "failed",
+        status: JOB_STATUS.FAILED,
         errorMessage: "Failed to download video from Runway",
         completedAt: new Date(),
       },
@@ -125,8 +130,8 @@ export async function POST(request: NextRequest) {
     await prisma.job.update({
       where: { id: job.id },
       data: {
-        status: "failed",
-        errorMessage: "Dropbox not connected",
+        status: JOB_STATUS.FAILED,
+        errorMessage: JOB_ERROR.DROPBOX_NOT_CONNECTED,
         completedAt: new Date(),
       },
     });
@@ -147,7 +152,7 @@ export async function POST(request: NextRequest) {
     await prisma.job.update({
       where: { id: job.id },
       data: {
-        status: "failed",
+        status: JOB_STATUS.FAILED,
         errorMessage: "Failed to upload to Dropbox",
         completedAt: new Date(),
       },
@@ -181,7 +186,7 @@ export async function POST(request: NextRequest) {
           userId: job.userId,
           amount: new Prisma.Decimal(-creditCost),
           jobId: job.id,
-          kind: "spend",
+          kind: CREDIT_KIND.SPEND,
           description: "Video generation",
         },
       });
@@ -189,7 +194,7 @@ export async function POST(request: NextRequest) {
     await tx.job.update({
       where: { id: job.id },
       data: {
-        status: "completed",
+        status: JOB_STATUS.COMPLETED,
         outputDropboxPath: uploadResult.path_display ?? outputPath,
         completedAt: new Date(),
         apiCost: new Prisma.Decimal(apiCost),
@@ -197,6 +202,13 @@ export async function POST(request: NextRequest) {
       },
     });
   });
+
+  // Fire-and-forget auto-recharge check after credits deducted
+  if (deductCredits) {
+    maybeAutoRecharge(job.userId).catch((err) =>
+      console.error("[webhook/job] auto-recharge error:", err)
+    );
+  }
 
   return NextResponse.json({ ok: true, outputDropboxPath: outputPath });
 }

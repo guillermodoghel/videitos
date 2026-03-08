@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHmac } from "crypto";
 import { prisma } from "@/lib/prisma";
+import { JOB_STATUS } from "@/lib/constants/job-status";
 import {
   getValidAccessToken,
   listFolderWithCursor,
@@ -140,7 +141,7 @@ export async function POST(request: NextRequest) {
             data: {
               userId,
               templateId: template.id,
-              status: "queued",
+              status: JOB_STATUS.QUEUED,
               dropboxSourceFilePath: sourceFilePath,
               dropboxSourceFileId: fileId ?? null,
             },

@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { hashPassword, getSessionUser } from "@/lib/auth";
+import { USER_ROLE } from "@/lib/constants/user-role";
 
 export async function GET() {
   const user = await getSessionUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (user.role !== "admin") {
+  if (user.role !== USER_ROLE.ADMIN) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -23,7 +24,7 @@ export async function POST(request: NextRequest) {
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (user.role !== "admin") {
+  if (user.role !== USER_ROLE.ADMIN) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

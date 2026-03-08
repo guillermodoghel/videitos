@@ -9,7 +9,8 @@ const MAX_PER_PAGE = 100;
 /**
  * GET /api/jobs
  * Returns the current user's jobs with template name for the Jobs page.
- * Query: page (1-based), perPage (default 20). Returns jobs, total, page, perPage.
+ * Query: page (1-based), perPage (default 20), model (template model id), status (job status).
+ * Returns jobs, total, page, perPage.
  */
 export async function GET(request: NextRequest) {
   const userId = await getSessionUserId();
@@ -21,10 +22,18 @@ export async function GET(request: NextRequest) {
   const page = Math.max(1, parseInt(searchParams.get("page") ?? "1", 10) || 1);
   let perPage = parseInt(searchParams.get("perPage") ?? String(DEFAULT_PER_PAGE), 10) || DEFAULT_PER_PAGE;
   perPage = Math.min(MAX_PER_PAGE, Math.max(MIN_PER_PAGE, perPage));
+  const model = searchParams.get("model")?.trim() || null;
+  const status = searchParams.get("status")?.trim() || null;
+
+  const where = {
+    userId,
+    ...(status ? { status } : {}),
+    ...(model ? { template: { model } } : {}),
+  };
 
   const [jobs, total] = await Promise.all([
     prisma.job.findMany({
-      where: { userId },
+      where,
       orderBy: { createdAt: "desc" },
       skip: (page - 1) * perPage,
       take: perPage,
@@ -32,7 +41,7 @@ export async function GET(request: NextRequest) {
         template: { select: { name: true, model: true } },
       },
     }),
-    prisma.job.count({ where: { userId } }),
+    prisma.job.count({ where }),
   ]);
 
   const list = jobs.map((j) => ({

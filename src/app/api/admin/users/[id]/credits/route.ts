@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
+import { resumeInsufficientCreditsJobs } from "@/lib/resume-insufficient-credits-jobs";
+import { USER_ROLE } from "@/lib/constants/user-role";
+import { CREDIT_KIND } from "@/lib/constants/credit-transaction-kind";
 
 /**
  * POST /api/admin/users/[id]/credits
@@ -15,7 +18,7 @@ export async function POST(
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (user.role !== "admin") {
+  if (user.role !== USER_ROLE.ADMIN) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -52,11 +55,16 @@ export async function POST(
       data: {
         userId: targetUserId,
         amount: new Prisma.Decimal(amount),
-        kind: "grant",
+        kind: CREDIT_KIND.GRANT,
         description: "Admin grant",
       },
     });
   });
+
+  const resumed = await resumeInsufficientCreditsJobs(targetUserId);
+  if (resumed > 0) {
+    console.log("[admin/credits] Re-queued %s job(s) after grant (user=%s)", resumed, targetUserId);
+  }
 
   const updated = await prisma.user.findUnique({
     where: { id: targetUserId },

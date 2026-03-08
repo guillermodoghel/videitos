@@ -6,6 +6,7 @@
 
 import { sleep } from "workflow";
 import { processJob } from "@/lib/process-job";
+import { WEBHOOK_JOB_STATUS } from "@/lib/constants/webhook-job-status";
 
 export type ProcessStepResult =
   | { ok: true; operationName: string }
@@ -47,7 +48,7 @@ async function checkJobStatusStep(
 async function webhookJobStep(
   baseUrl: string,
   body: {
-    status: "ready" | "error";
+    status: typeof WEBHOOK_JOB_STATUS.READY | typeof WEBHOOK_JOB_STATUS.ERROR;
     jobId: string;
     operationName?: string;
     videoUri?: string;
@@ -82,7 +83,7 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
       continue;
     }
     await webhookJobStep(callbackBaseUrl, {
-      status: "error",
+      status: WEBHOOK_JOB_STATUS.ERROR,
       jobId,
       error: stepResult.error,
     });
@@ -94,7 +95,7 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
 
     if (status.done && status.videoUri) {
       await webhookJobStep(callbackBaseUrl, {
-        status: "ready",
+        status: WEBHOOK_JOB_STATUS.READY,
         jobId,
         operationName,
         videoUri: status.videoUri,
@@ -103,7 +104,7 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
     }
     if (status.done && status.error) {
       await webhookJobStep(callbackBaseUrl, {
-        status: "error",
+        status: WEBHOOK_JOB_STATUS.ERROR,
         jobId,
         operationName,
         error: status.error,

@@ -5,6 +5,7 @@
  */
 
 import { prisma } from "@/lib/prisma";
+import { USER_ROLE } from "@/lib/constants/user-role";
 
 let platformKeyCache: string | null | undefined = undefined;
 
@@ -14,7 +15,7 @@ let platformKeyCache: string | null | undefined = undefined;
 export async function getPlatformRunwayApiKey(): Promise<string | null> {
   if (platformKeyCache !== undefined) return platformKeyCache;
   const admin = await prisma.user.findFirst({
-    where: { role: "admin", runwayApiKey: { not: null } },
+    where: { role: USER_ROLE.ADMIN, runwayApiKey: { not: null } },
     select: { runwayApiKey: true },
   });
   platformKeyCache = admin?.runwayApiKey ?? null;

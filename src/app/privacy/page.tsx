@@ -46,10 +46,16 @@ export default function PrivacyPage() {
                 <strong>Account and session data:</strong> When you sign in (e.g. via the provided auth flow), we store what is needed to identify you and keep you logged in (e.g. user id, session token). We do not store passwords in plain text.
               </li>
               <li>
+                <strong>Payment and credits:</strong> If you buy credits or set up auto-recharge, we use Stripe for payment processing. We store Stripe customer and payment-method identifiers and your credit balance and transaction history. We do not store full card numbers; Stripe handles card data per their privacy policy.
+              </li>
+              <li>
+                <strong>Optional Runway API key:</strong> You may provide your own Runway API key in settings. If you do, we store it and use it only to run your video jobs; we do not use it for other users.
+              </li>
+              <li>
                 <strong>Dropbox connection:</strong> If you connect Dropbox, we store OAuth tokens to access the folders you link to templates. We only access the specific folders you designate for each template, to list files and create video generation jobs when new images are added.
               </li>
               <li>
-                <strong>Templates and reference images:</strong> Template names, settings, and reference images you upload or link are stored so we can run video generation (e.g. with AI/video APIs). Reference images may be sent to third-party services that perform the generation.
+                <strong>Templates and reference images:</strong> Template names, settings, and reference images you upload or link are stored (including in object storage, e.g. S3) so we can run video generation. Reference images and job parameters may be sent to third-party video/AI providers that perform the generation.
               </li>
               <li>
                 <strong>Jobs and status:</strong> We store job records (e.g. status, inputs, outputs, error messages) so you can see history and we can retry or debug when needed.
@@ -69,10 +75,16 @@ export default function PrivacyPage() {
                 <strong>Hosting and database:</strong> Our app and database are hosted by our chosen provider (e.g. Vercel, Supabase); their privacy and security policies apply to data stored there.
               </li>
               <li>
+                <strong>Object storage:</strong> Reference images and generated assets may be stored in cloud object storage (e.g. AWS S3). The provider&apos;s policies apply to that data.
+              </li>
+              <li>
+                <strong>Stripe:</strong> Payment card data is processed by Stripe. We send Stripe only what is needed for purchases and auto-recharge (e.g. customer and payment method identifiers). Stripe&apos;s privacy policy applies to payment data.
+              </li>
+              <li>
                 <strong>Dropbox:</strong> When you connect Dropbox, Dropbox&apos;s terms and privacy policy apply to that connection and the data we access with your consent.
               </li>
               <li>
-                <strong>Cloud and AI providers:</strong> We use cloud and AI services (e.g. Vercel, and video/AI APIs) for tasks such as job processing, storage, and video generation. Reference images and job parameters may be sent to these providers to perform the service.
+                <strong>Runway and video generation:</strong> We use Runway (and possibly other video/AI APIs) to generate videos. Reference images and job parameters are sent to these providers to perform the service; their privacy and terms apply.
               </li>
             </ul>
           </section>
@@ -100,7 +112,7 @@ export default function PrivacyPage() {
               6. Your choices
             </h2>
             <p>
-              You can disconnect Dropbox from settings, delete or edit templates, and stop using the app at any time. If you want to delete your account or request a copy or deletion of your data, contact us using the details below.
+              You can disconnect Dropbox, remove saved payment methods, clear your Runway API key, delete or edit templates, and stop using the app at any time (via dashboard settings and credits). If you want to delete your account or request a copy or deletion of your data, contact us using the details below.
             </p>
           </section>
 

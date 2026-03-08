@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { USER_ROLE } from "@/lib/constants/user-role";
 import { prisma } from "@/lib/prisma";
 
 function formatDate(iso: Date): string {
@@ -61,7 +62,7 @@ export default async function AdminUsersPage() {
                 <td className="px-4 py-3">
                   <span
                     className={
-                      u.role === "admin"
+                      u.role === USER_ROLE.ADMIN
                         ? "rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-800 dark:bg-violet-900/40 dark:text-violet-300"
                         : "text-zinc-600 dark:text-zinc-400"
                     }

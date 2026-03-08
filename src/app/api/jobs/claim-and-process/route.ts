@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { processJob } from "@/lib/process-job";
+import { JOB_STATUS } from "@/lib/constants/job-status";
+import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 
 /**
  * POST /api/jobs/claim-and-process
@@ -50,8 +52,8 @@ export async function POST(request: NextRequest) {
     const fatal =
       result.error === "Job not found" ||
       result.error === "No API key" ||
-      result.error === "insufficient_credits" ||
-      result.error.startsWith("Job not queued (status: failed)");
+      result.error === JOB_ERROR.INSUFFICIENT_CREDITS_CODE ||
+      result.error.startsWith(`Job not queued (status: ${JOB_STATUS.FAILED})`);
     console.log("[claim-and-process] jobId=%s %s → error=%s", jobId, fatal ? "fatal" : "retry", result.error);
     return NextResponse.json(
       { success: false, fatal, error: result.error },
@@ -60,9 +62,9 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await prisma.job.updateMany({
-      where: { id: jobId, status: "queued" },
+      where: { id: jobId, status: JOB_STATUS.QUEUED },
       data: {
-        status: "failed",
+        status: JOB_STATUS.FAILED,
         errorMessage: message.slice(0, 1000),
         completedAt: new Date(),
       },

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionUserId } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { startJobWorkflow } from "@/lib/start-job-workflow";
+import { JOB_STATUS } from "@/lib/constants/job-status";
 
 const HOSTNAME = process.env.HOSTNAME ?? "http://localhost:3000";
 
@@ -30,7 +31,7 @@ export async function POST(
   if (job.userId !== userId) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
-  if (job.status !== "failed") {
+  if (job.status !== JOB_STATUS.FAILED) {
     return NextResponse.json(
       { error: `Job cannot be retried (status: ${job.status})` },
       { status: 400 }
@@ -40,7 +41,7 @@ export async function POST(
   await prisma.job.update({
     where: { id: jobId },
     data: {
-      status: "queued",
+      status: JOB_STATUS.QUEUED,
       errorMessage: null,
       completedAt: null,
       providerOperationId: null,

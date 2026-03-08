@@ -17,6 +17,9 @@ import {
   type RunwayTextToImageRatio,
 } from "@/lib/runway";
 import { getRunwayApiKeyForUser, usesPlatformKey } from "@/lib/runway-api-key";
+import { maybeAutoRecharge } from "@/lib/stripe";
+import { JOB_STATUS } from "@/lib/constants/job-status";
+import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 
 export type ProcessJobResult =
   | { ok: true; operationName: string }
@@ -51,15 +54,15 @@ export async function processJob(
     return { ok: false, error: "Job not found" };
   }
   // Already sent or completed: let workflow proceed to polling (no loop)
-  if (job.status === "processing" && job.providerOperationId) {
+  if (job.status === JOB_STATUS.PROCESSING && job.providerOperationId) {
     console.log("[process-job] jobId=%s already processing → operationName=%s", jobId, job.providerOperationId);
     return { ok: true, operationName: job.providerOperationId };
   }
-  if (job.status === "completed") {
+  if (job.status === JOB_STATUS.COMPLETED) {
     console.log("[process-job] jobId=%s already completed → operationName=%s", jobId, job.providerOperationId ?? "n/a");
     return { ok: true, operationName: job.providerOperationId ?? "" };
   }
-  if (job.status !== "queued") {
+  if (job.status !== JOB_STATUS.QUEUED) {
     console.log("[process-job] jobId=%s → Job not queued (status=%s)", jobId, job.status);
     return { ok: false, error: `Job not queued (status: ${job.status})` };
   }
@@ -85,7 +88,7 @@ export async function processJob(
                 const runwayInProgress = await tx.job.count({
                   where: {
                     userId: job.userId,
-                    status: "processing",
+                    status: JOB_STATUS.PROCESSING,
                     template: { model: { in: [...RUNWAY_IMAGE_TO_VIDEO_IDS] } },
                   },
                 });
@@ -94,7 +97,7 @@ export async function processJob(
                 // Platform key: one concurrent task across all users without key
                 const platformInProgress = await tx.job.count({
                   where: {
-                    status: "processing",
+                    status: JOB_STATUS.PROCESSING,
                     user: { runwayApiKey: null },
                     template: { model: { in: [...RUNWAY_IMAGE_TO_VIDEO_IDS] } },
                   },
@@ -121,7 +124,7 @@ export async function processJob(
               if (inWindow >= limit.requestsPerWindow) throw new Error("rate_limit");
             }
             const updated = await tx.job.updateMany({
-              where: { id: jobId, status: "queued" },
+              where: { id: jobId, status: JOB_STATUS.QUEUED },
               data: { rateLimitClaimedAt: new Date() },
             });
             if (updated.count === 0) throw new Error("rate_limit");
@@ -162,7 +165,7 @@ export async function processJob(
       console.log("[process-job] jobId=%s → No Runway API key (user has none and no platform key)", jobId);
       await prisma.job.update({
         where: { id: job.id },
-        data: { status: "failed", errorMessage: "No Runway API key. Add your key in Settings or ask an admin to add platform key.", completedAt: new Date() },
+        data: { status: JOB_STATUS.FAILED, errorMessage: JOB_ERROR.NO_RUNWAY_API_KEY, completedAt: new Date() },
       });
       return { ok: false, error: "No API key" };
     }
@@ -180,13 +183,17 @@ export async function processJob(
         await prisma.job.update({
           where: { id: job.id },
           data: {
-            status: "failed",
+            status: JOB_STATUS.FAILED,
             errorMessage: "Insufficient credits",
             completedAt: new Date(),
             rateLimitClaimedAt: null,
           },
         });
-        return { ok: false, error: "insufficient_credits" };
+        // Trigger auto-recharge; if successful the job will be auto-retried
+        maybeAutoRecharge(job.userId, job.id).catch((err) =>
+          console.error("[process-job] auto-recharge error:", err)
+        );
+        return { ok: false, error: JOB_ERROR.INSUFFICIENT_CREDITS_CODE };
       }
     }
     const token = await getValidAccessToken(job.userId);
@@ -194,7 +201,7 @@ export async function processJob(
       console.log("[process-job] jobId=%s → Dropbox not connected", jobId);
       await prisma.job.update({
         where: { id: job.id },
-        data: { status: "failed", errorMessage: "Dropbox not connected", completedAt: new Date() },
+        data: { status: JOB_STATUS.FAILED, errorMessage: JOB_ERROR.DROPBOX_NOT_CONNECTED, completedAt: new Date() },
       });
       return { ok: false, error: "Dropbox not connected" };
     }
@@ -229,10 +236,15 @@ export async function processJob(
         console.log("[process-job] jobId=%s → Pre-gen: no valid reference images", jobId);
         await prisma.job.update({
           where: { id: job.id },
-          data: { status: "failed", errorMessage: "Pre-generation: no valid reference images", completedAt: new Date() },
+          data: { status: JOB_STATUS.FAILED, errorMessage: "Pre-generation: no valid reference images", completedAt: new Date() },
         });
         return { ok: false, error: "Pre-gen refs missing" };
       }
+      // Show as processing in UI while creating first image (pre-gen)
+      await prisma.job.update({
+        where: { id: job.id },
+        data: { status: JOB_STATUS.PROCESSING },
+      });
       console.log("[process-job] jobId=%s → Pre-gen: text-to-image (%s refs, character from Dropbox)", jobId, refUris.length);
       const imageToVideoRatio = config.runwayRatio ?? aspectRatioToRunwayRatio(config.aspectRatio);
       const preGenRatio: RunwayTextToImageRatio =
@@ -247,10 +259,15 @@ export async function processJob(
       if ("error" in preGenResult) {
         const isRateLimit = preGenResult.error === "rate_limit";
         console.log("[process-job] jobId=%s → Pre-gen error: %s%s", jobId, preGenResult.error, isRateLimit ? " (retry)" : "");
-        if (!isRateLimit) {
+        if (isRateLimit) {
           await prisma.job.update({
             where: { id: job.id },
-            data: { status: "failed", errorMessage: `Pre-generation: ${preGenResult.error}`, completedAt: new Date() },
+            data: { status: JOB_STATUS.QUEUED },
+          });
+        } else {
+          await prisma.job.update({
+            where: { id: job.id },
+            data: { status: JOB_STATUS.FAILED, errorMessage: `Pre-generation: ${preGenResult.error}`, completedAt: new Date() },
           });
         }
         return { ok: false, error: preGenResult.error };
@@ -281,7 +298,7 @@ export async function processJob(
         console.log("[process-job] jobId=%s → Failed to download source image from Dropbox", jobId);
         await prisma.job.update({
           where: { id: job.id },
-          data: { status: "failed", errorMessage: "Failed to download source image from Dropbox", completedAt: new Date() },
+            data: { status: JOB_STATUS.FAILED, errorMessage: "Failed to download source image from Dropbox", completedAt: new Date() },
         });
         return { ok: false, error: "Failed to download source image" };
       }
@@ -304,7 +321,7 @@ export async function processJob(
       if (!isRateLimit) {
         await prisma.job.update({
           where: { id: job.id },
-          data: { status: "failed", errorMessage: result.error, completedAt: new Date() },
+          data: { status: JOB_STATUS.FAILED, errorMessage: result.error, completedAt: new Date() },
         });
       }
       return { ok: false, error: result.error };
@@ -312,7 +329,7 @@ export async function processJob(
     await prisma.job.update({
       where: { id: job.id },
       data: {
-        status: "processing",
+        status: JOB_STATUS.PROCESSING,
         providerOperationId: result.taskId,
         sentAt: new Date(),
       },
@@ -325,7 +342,7 @@ export async function processJob(
   console.log("[process-job] jobId=%s → Unsupported model: %s", jobId, modelId);
   await prisma.job.update({
     where: { id: job.id },
-    data: { status: "failed", errorMessage: "Unsupported model (only Runway is supported)", completedAt: new Date() },
+    data: { status: JOB_STATUS.FAILED, errorMessage: JOB_ERROR.UNSUPPORTED_MODEL, completedAt: new Date() },
   });
   return { ok: false, error: "Unsupported model" };
 }

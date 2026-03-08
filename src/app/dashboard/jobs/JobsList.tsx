@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useState } from "react";
 import { VIDEO_MODELS } from "@/lib/video-models";
+import { JOB_STATUS } from "@/lib/constants/job-status";
 
 type JobRow = {
   id: string;
@@ -30,32 +31,60 @@ const POLL_INTERVAL_MS = 5000;
 const DEFAULT_PER_PAGE = 10;
 const PER_PAGE_OPTIONS = [10, 20, 50, 100];
 
-function formatDate(iso: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
+function formatDuration(createdAt: string, completedAt: string | null): string {
+  if (!completedAt) return "—";
+  const start = new Date(createdAt).getTime();
+  const end = new Date(completedAt).getTime();
+  const secs = Math.round((end - start) / 1000);
+  if (secs < 60) return `${secs}s`;
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 function statusLabel(status: string): string {
   const labels: Record<string, string> = {
-    queued: "Queued",
-    processing: "Processing",
-    completed: "Completed",
-    failed: "Failed",
-    sent_to_veo: "Processing", // legacy, migrated to processing
+    [JOB_STATUS.QUEUED]: "Queued",
+    [JOB_STATUS.PROCESSING]: "Processing",
+    [JOB_STATUS.COMPLETED]: "Completed",
+    [JOB_STATUS.FAILED]: "Failed",
+    [JOB_STATUS.SENT_TO_VEO]: "Processing", // legacy
   };
   return labels[status] ?? status;
 }
 
 function statusColor(status: string): string {
-  if (status === "completed")
+  if (status === JOB_STATUS.COMPLETED)
     return "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300";
-  if (status === "failed")
+  if (status === JOB_STATUS.FAILED)
     return "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300";
   return "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300";
+}
+
+function StatusSpinner() {
+  return (
+    <svg
+      className="h-3.5 w-3.5 shrink-0 animate-spin"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      aria-hidden
+    >
+      <circle
+        className="opacity-25"
+        cx="12"
+        cy="12"
+        r="10"
+        stroke="currentColor"
+        strokeWidth="4"
+      />
+      <path
+        className="opacity-75"
+        fill="currentColor"
+        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+      />
+    </svg>
+  );
 }
 
 function modelLabel(modelId: string): string {
@@ -66,7 +95,7 @@ function modelLabel(modelId: string): string {
 function JobDetailsPanel({ job, details }: { job: JobRow; details?: JobDetails | null }) {
   const hasInputs = details && (details.referenceImageUrls.length > 0 || details.sourceImageUrl);
   const hasPreGen = details?.preGenImageUrl;
-  const hasOutput = job.status === "completed" && details?.outputVideoUrl;
+  const hasOutput = job.status === JOB_STATUS.COMPLETED && details?.outputVideoUrl;
 
   return (
     <div className="space-y-4">
@@ -79,13 +108,13 @@ function JobDetailsPanel({ job, details }: { job: JobRow; details?: JobDetails |
             <dt className="text-zinc-500 dark:text-zinc-400">Source file</dt>
             <dd className="break-all font-mono text-zinc-700 dark:text-zinc-300">{job.dropboxSourceFilePath}</dd>
           </div>
-          {job.status === "completed" && job.outputDropboxPath && (
+          {job.status === JOB_STATUS.COMPLETED && job.outputDropboxPath && (
             <div>
               <dt className="text-zinc-500 dark:text-zinc-400">Output</dt>
               <dd className="break-all font-mono text-zinc-700 dark:text-zinc-300">{job.outputDropboxPath}</dd>
             </div>
           )}
-          {job.status === "failed" && job.errorMessage && (
+          {job.status === JOB_STATUS.FAILED && job.errorMessage && (
             <div>
               <dt className="text-zinc-500 dark:text-zinc-400">Error</dt>
               <dd className="break-all text-red-600 dark:text-red-400">{job.errorMessage}</dd>
@@ -194,6 +223,8 @@ export function JobsList() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(DEFAULT_PER_PAGE);
+  const [filterModel, setFilterModel] = useState("");
+  const [filterStatus, setFilterStatus] = useState("");
   const [loading, setLoading] = useState(true);
   const [pollingEnabled, setPollingEnabled] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -212,6 +243,8 @@ export function JobsList() {
   async function fetchJobs() {
     try {
       const params = new URLSearchParams({ page: String(page), perPage: String(perPage) });
+      if (filterModel) params.set("model", filterModel);
+      if (filterStatus) params.set("status", filterStatus);
       const res = await fetch(`/api/jobs?${params}`);
       if (res.ok) {
         const data = await res.json();
@@ -227,13 +260,13 @@ export function JobsList() {
 
   useEffect(() => {
     fetchJobs();
-  }, [page, perPage]);
+  }, [page, perPage, filterModel, filterStatus]);
 
   useEffect(() => {
     if (!pollingEnabled) return;
     const t = setInterval(fetchJobs, POLL_INTERVAL_MS);
     return () => clearInterval(t);
-  }, [pollingEnabled, page, perPage]);
+  }, [pollingEnabled, page, perPage, filterModel, filterStatus]);
 
   async function handleRetry(jobId: string) {
     setRetryingId(jobId);
@@ -255,7 +288,7 @@ export function JobsList() {
   // When a job that is expanded or was expanded (in cache) becomes completed, refetch its details to load the output video
   useEffect(() => {
     jobs.forEach((j) => {
-      if (j.status !== "completed") return;
+      if (j.status !== JOB_STATUS.COMPLETED) return;
       const isRelevant = expandedId === j.id || detailsCache[j.id];
       if (!isRelevant) return;
       if (detailsCache[j.id]?.outputVideoUrl) return;
@@ -291,7 +324,7 @@ export function JobsList() {
     );
   }
 
-  if (!loading && total === 0) {
+  if (!loading && total === 0 && !filterModel && !filterStatus) {
     return (
       <div className="space-y-4">
         <div className="rounded-xl border border-zinc-200 bg-white p-8 text-center dark:border-zinc-800 dark:bg-zinc-900">
@@ -304,8 +337,54 @@ export function JobsList() {
     );
   }
 
+  const statusFilterOptions = [
+    { value: "", label: "All statuses" },
+    { value: JOB_STATUS.QUEUED, label: "Queued" },
+    { value: JOB_STATUS.PROCESSING, label: "Processing" },
+    { value: JOB_STATUS.COMPLETED, label: "Completed" },
+    { value: JOB_STATUS.FAILED, label: "Failed" },
+  ];
+
   return (
     <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="flex flex-wrap items-center gap-3 border-b border-zinc-200 px-4 py-3 dark:border-zinc-700">
+        <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Filter</span>
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-zinc-600 dark:text-zinc-400">Model</span>
+          <select
+            value={filterModel}
+            onChange={(e) => {
+              setFilterModel(e.target.value);
+              setPage(1);
+            }}
+            className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+          >
+            <option value="">All models</option>
+            {VIDEO_MODELS.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-zinc-600 dark:text-zinc-400">Status</span>
+          <select
+            value={filterStatus}
+            onChange={(e) => {
+              setFilterStatus(e.target.value);
+              setPage(1);
+            }}
+            className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+          >
+            {statusFilterOptions.map((opt) => (
+              <option key={opt.value || "all"} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead>
@@ -321,10 +400,7 @@ export function JobsList() {
                 Status
               </th>
               <th className="px-4 py-3 font-medium text-zinc-700 dark:text-zinc-300">
-                Created
-              </th>
-              <th className="px-4 py-3 font-medium text-zinc-700 dark:text-zinc-300">
-                Completed
+                Duration
               </th>
               <th className="px-4 py-3 font-medium text-zinc-700 dark:text-zinc-300">
                 Cost
@@ -335,7 +411,14 @@ export function JobsList() {
             </tr>
           </thead>
           <tbody>
-            {jobs.map((j) => (
+            {jobs.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="px-4 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
+                  No jobs match the current filters.
+                </td>
+              </tr>
+            ) : (
+              jobs.map((j) => (
               <Fragment key={j.id}>
                 <tr className="border-b border-zinc-100 dark:border-zinc-700/50">
                   <td className="px-2 py-3">
@@ -364,16 +447,16 @@ export function JobsList() {
                   </td>
                   <td className="px-4 py-3">
                     <span
-                      className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${statusColor(j.status)}`}
+                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${statusColor(j.status)}`}
                     >
+                      {(j.status === JOB_STATUS.QUEUED || j.status === JOB_STATUS.PROCESSING || j.status === JOB_STATUS.SENT_TO_VEO) && (
+                        <StatusSpinner />
+                      )}
                       {statusLabel(j.status)}
                     </span>
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-zinc-600 dark:text-zinc-400">
-                    {formatDate(j.createdAt)}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-zinc-600 dark:text-zinc-400">
-                    {formatDate(j.completedAt)}
+                  <td className="whitespace-nowrap px-4 py-3 text-zinc-600 dark:text-zinc-400 tabular-nums">
+                    {formatDuration(j.createdAt, j.completedAt)}
                   </td>
                   <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
                     {j.creditCost != null ? (
@@ -385,7 +468,7 @@ export function JobsList() {
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    {j.status === "failed" && (
+                    {j.status === JOB_STATUS.FAILED && (
                       <button
                         type="button"
                         onClick={() => handleRetry(j.id)}
@@ -410,7 +493,8 @@ export function JobsList() {
                   </tr>
                 )}
               </Fragment>
-            ))}
+              ))
+            )}
           </tbody>
         </table>
       </div>

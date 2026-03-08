@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionUserId } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { startJobWorkflow } from "@/lib/start-job-workflow";
+import { JOB_STATUS } from "@/lib/constants/job-status";
 
 const HOSTNAME = process.env.HOSTNAME ?? "http://localhost:3000";
 
@@ -41,7 +42,7 @@ export async function POST(request: NextRequest) {
     if (!job) {
       return NextResponse.json({ error: "Job not found" }, { status: 404 });
     }
-    if (job.status !== "queued") {
+    if (job.status !== JOB_STATUS.QUEUED) {
       return NextResponse.json({ error: `Job not queued (status: ${job.status})` }, { status: 400 });
     }
     if (userId && job.userId !== userId) {
@@ -63,7 +64,7 @@ export async function POST(request: NextRequest) {
 
   // Start workflow for each queued job (rate limit enforced in workflow step retries)
   const queued = await prisma.job.findMany({
-    where: { userId, status: "queued" },
+    where: { userId, status: JOB_STATUS.QUEUED },
     orderBy: { createdAt: "asc" },
     select: { id: true, userId: true, template: { select: { model: true } } },
   });
