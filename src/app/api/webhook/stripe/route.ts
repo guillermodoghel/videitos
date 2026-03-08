@@ -120,7 +120,8 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
 
 async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
   const type = pi.metadata?.type;
-  if (type !== STRIPE_PI_TYPE.AUTO_RECHARGE && type !== STRIPE_PI_TYPE.CREDIT_PURCHASE) return;
+  // CREDIT_PURCHASE is already handled by checkout.session.completed; granting here would double-credit
+  if (type !== STRIPE_PI_TYPE.AUTO_RECHARGE) return;
 
   const userId = pi.metadata?.userId;
   const creditsToGrant = parseInt(pi.metadata?.creditsToGrant ?? "0", 10);
@@ -136,11 +137,6 @@ async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
   }
 
   const externalId = `pi_${pi.id}`;
-
-  if (type === STRIPE_PI_TYPE.CREDIT_PURCHASE) {
-    await grantCredits(userId, creditsToGrant, CREDIT_KIND.PURCHASE, "Credit purchase", externalId);
-    return;
-  }
 
   // AUTO_RECHARGE
   const granted = await grantCredits(userId, creditsToGrant, CREDIT_KIND.AUTO_RECHARGE, "Auto-recharge", externalId);
