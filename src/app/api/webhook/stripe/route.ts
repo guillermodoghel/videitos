@@ -110,7 +110,8 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     }
   }
 
-  const externalId = `checkout_${session.id}`;
+  // Use PaymentIntent id when present so we share idempotency with payment_intent.succeeded (saved-card flow uses PI only)
+  const externalId = paymentIntentId ? `pi_${paymentIntentId}` : `checkout_${session.id}`;
   const granted = await grantCredits(userId, creditsToGrant, CREDIT_KIND.PURCHASE, "Credit purchase", externalId);
   if (granted) {
     const n = await resumeInsufficientCreditsJobs(userId);
@@ -120,8 +121,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
 
 async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
   const type = pi.metadata?.type;
-  // CREDIT_PURCHASE is already handled by checkout.session.completed; granting here would double-credit
-  if (type !== STRIPE_PI_TYPE.AUTO_RECHARGE) return;
+  if (type !== STRIPE_PI_TYPE.AUTO_RECHARGE && type !== STRIPE_PI_TYPE.CREDIT_PURCHASE) return;
 
   const userId = pi.metadata?.userId;
   const creditsToGrant = parseInt(pi.metadata?.creditsToGrant ?? "0", 10);
@@ -137,6 +137,16 @@ async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
   }
 
   const externalId = `pi_${pi.id}`;
+
+  if (type === STRIPE_PI_TYPE.CREDIT_PURCHASE) {
+    // Saved-card purchase (no Checkout); Checkout flow grants in checkout.session.completed with same pi_ id → deduped
+    const granted = await grantCredits(userId, creditsToGrant, CREDIT_KIND.PURCHASE, "Credit purchase", externalId);
+    if (granted) {
+      const n = await resumeInsufficientCreditsJobs(userId);
+      if (n > 0) console.log("[stripe-webhook] Re-queued %s job(s) after purchase (user=%s)", n, userId);
+    }
+    return;
+  }
 
   // AUTO_RECHARGE
   const granted = await grantCredits(userId, creditsToGrant, CREDIT_KIND.AUTO_RECHARGE, "Auto-recharge", externalId);
