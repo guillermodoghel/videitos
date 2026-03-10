@@ -727,8 +727,6 @@ export function CreditsView() {
     if (params.get("success") === "1") {
       window.history.replaceState({}, "", "/dashboard/credits");
     }
-    const interval = setInterval(loadBalance, 10_000);
-    return () => clearInterval(interval);
   }, [loadBalance]);
 
   useEffect(() => {

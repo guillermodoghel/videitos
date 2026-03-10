@@ -3,8 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTheme } from "./ThemeToggle";
 
-const CREDITS_POLL_MS = 5000;
-
 function formatCredits(balance: number): string {
   return balance.toLocaleString("en-US", {
     minimumFractionDigits: 2,
@@ -27,21 +25,6 @@ export function NavUserMenu({
   useEffect(() => {
     setBalance(creditBalance);
   }, [creditBalance]);
-
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch("/api/credits", { credentials: "include" });
-        if (res.ok) {
-          const data = await res.json();
-          if (typeof data.balance === "number") setBalance(data.balance);
-        }
-      } catch {
-        // keep previous balance
-      }
-    }, CREDITS_POLL_MS);
-    return () => clearInterval(interval);
-  }, []);
 
   useEffect(() => {
     if (!open) return;

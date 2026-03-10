@@ -221,6 +221,7 @@ function JobDetailsPanel({ job, details }: { job: JobRow; details?: JobDetails |
 export function JobsList() {
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [total, setTotal] = useState(0);
+  const [hasActiveJobs, setHasActiveJobs] = useState(false);
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(DEFAULT_PER_PAGE);
   const [filterModel, setFilterModel] = useState("");
@@ -250,6 +251,7 @@ export function JobsList() {
         const data = await res.json();
         setJobs(data.jobs ?? []);
         setTotal(data.total ?? 0);
+        setHasActiveJobs(data.hasActiveJobs === true);
       }
     } catch {
       // keep previous state
@@ -262,11 +264,12 @@ export function JobsList() {
     fetchJobs();
   }, [page, perPage, filterModel, filterStatus]);
 
+  // Poll only when user wants it and backend says there are active jobs (queued/processing)
   useEffect(() => {
-    if (!pollingEnabled) return;
+    if (!pollingEnabled || !hasActiveJobs) return;
     const t = setInterval(fetchJobs, POLL_INTERVAL_MS);
     return () => clearInterval(t);
-  }, [pollingEnabled, page, perPage, filterModel, filterStatus]);
+  }, [pollingEnabled, hasActiveJobs, page, perPage, filterModel, filterStatus]);
 
   async function handleRetry(jobId: string) {
     setRetryingId(jobId);
@@ -546,7 +549,11 @@ export function JobsList() {
             </select>
           </label>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            {pollingEnabled ? "Auto-refreshing every 5s." : "Auto-refresh paused."}
+            {pollingEnabled && hasActiveJobs
+              ? "Auto-refreshing every 5s."
+              : !pollingEnabled
+                ? "Auto-refresh paused."
+                : "No active jobs; refresh paused."}
           </p>
           <button
             type="button"

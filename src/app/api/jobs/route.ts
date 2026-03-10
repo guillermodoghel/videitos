@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUserId } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { JOB_STATUS } from "@/lib/constants/job-status";
 
 const DEFAULT_PER_PAGE = 10;
 const MIN_PER_PAGE = 5;
@@ -31,7 +32,9 @@ export async function GET(request: NextRequest) {
     ...(model ? { template: { model } } : {}),
   };
 
-  const [jobs, total] = await Promise.all([
+  const activeStatuses = [JOB_STATUS.QUEUED, JOB_STATUS.PROCESSING, JOB_STATUS.SENT_TO_VEO];
+
+  const [jobs, total, activeCount] = await Promise.all([
     prisma.job.findMany({
       where,
       orderBy: { createdAt: "desc" },
@@ -42,6 +45,9 @@ export async function GET(request: NextRequest) {
       },
     }),
     prisma.job.count({ where }),
+    prisma.job.count({
+      where: { userId, status: { in: activeStatuses } },
+    }),
   ]);
 
   const list = jobs.map((j) => ({
@@ -60,5 +66,12 @@ export async function GET(request: NextRequest) {
     completedAt: j.completedAt?.toISOString() ?? null,
   }));
 
-  return NextResponse.json({ jobs: list, total, page, perPage });
+  return NextResponse.json({
+    jobs: list,
+    total,
+    page,
+    perPage,
+    /** True if user has any job queued or in progress; frontend uses this to decide whether to keep polling. */
+    hasActiveJobs: activeCount > 0,
+  });
 }
