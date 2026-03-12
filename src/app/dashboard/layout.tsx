@@ -48,12 +48,20 @@ export default async function DashboardLayout({
               Settings
             </Link>
             {user.role === USER_ROLE.ADMIN && (
-              <Link
-                href="/dashboard/admin/users"
-                className="rounded-md px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-              >
-                Admin
-              </Link>
+              <>
+                <Link
+                  href="/dashboard/admin/users"
+                  className="rounded-md px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                >
+                  Admin
+                </Link>
+                <Link
+                  href="/dashboard/admin/revenue"
+                  className="rounded-md px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                >
+                  Revenue
+                </Link>
+              </>
             )}
           </nav>
           <NavUserMenu

@@ -20,7 +20,13 @@ export default async function AdminLayout({
           href="/dashboard/admin/users"
           className="text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
-          ← Users
+          Users
+        </Link>
+        <Link
+          href="/dashboard/admin/revenue"
+          className="text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+        >
+          Revenue
         </Link>
       </div>
       {children}

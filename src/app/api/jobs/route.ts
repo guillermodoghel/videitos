@@ -75,3 +75,38 @@ export async function GET(request: NextRequest) {
     hasActiveJobs: activeCount > 0,
   });
 }
+
+/**
+ * DELETE /api/jobs
+ * Body: { jobIds: string[] }
+ * Deletes only failed jobs that belong to the current user. Returns { deleted: number }.
+ */
+export async function DELETE(request: NextRequest) {
+  const userId = await getSessionUserId();
+  if (!userId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let body: { jobIds?: string[] };
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const rawIds = Array.isArray(body.jobIds) ? body.jobIds : [];
+  const jobIds = rawIds.filter((id) => typeof id === "string" && id.trim().length > 0);
+  if (jobIds.length === 0) {
+    return NextResponse.json({ deleted: 0 });
+  }
+
+  const result = await prisma.job.deleteMany({
+    where: {
+      id: { in: jobIds },
+      userId,
+      status: JOB_STATUS.FAILED,
+    },
+  });
+
+  return NextResponse.json({ deleted: result.count });
+}

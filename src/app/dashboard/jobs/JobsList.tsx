@@ -232,6 +232,8 @@ export function JobsList() {
   const [detailsCache, setDetailsCache] = useState<Record<string, JobDetails>>({});
   const [detailsLoading, setDetailsLoading] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [selectedForDelete, setSelectedForDelete] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
 
   const totalPages = Math.max(1, Math.ceil(total / perPage));
   const start = total === 0 ? 0 : (page - 1) * perPage + 1;
@@ -270,6 +272,51 @@ export function JobsList() {
     const t = setInterval(fetchJobs, POLL_INTERVAL_MS);
     return () => clearInterval(t);
   }, [pollingEnabled, hasActiveJobs, page, perPage, filterModel, filterStatus]);
+
+  const failedOnPage = jobs.filter((j) => j.status === JOB_STATUS.FAILED);
+  const failedIds = new Set(failedOnPage.map((j) => j.id));
+  const allFailedSelected = failedOnPage.length > 0 && failedOnPage.every((j) => selectedForDelete.has(j.id));
+
+  function toggleSelectFailed(jobId: string) {
+    setSelectedForDelete((prev) => {
+      const next = new Set(prev);
+      if (next.has(jobId)) next.delete(jobId);
+      else next.add(jobId);
+      return next;
+    });
+  }
+
+  function selectAllFailed() {
+    setSelectedForDelete((prev) => {
+      const next = new Set(prev);
+      failedOnPage.forEach((j) => next.add(j.id));
+      return next;
+    });
+  }
+
+  function deselectAll() {
+    setSelectedForDelete(new Set());
+  }
+
+  async function deleteSelected() {
+    if (selectedForDelete.size === 0) return;
+    setDeleting(true);
+    try {
+      const res = await fetch("/api/jobs", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobIds: Array.from(selectedForDelete) }),
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && typeof data.deleted === "number") {
+        setSelectedForDelete(new Set());
+        await fetchJobs();
+      }
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   async function handleRetry(jobId: string) {
     setRetryingId(jobId);
@@ -387,11 +434,38 @@ export function JobsList() {
             ))}
           </select>
         </label>
+        {failedOnPage.length > 0 && (
+          <div className="flex items-center gap-2 border-l border-zinc-200 pl-3 dark:border-zinc-700">
+            <button
+              type="button"
+              onClick={allFailedSelected ? deselectAll : selectAllFailed}
+              className="text-xs font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+            >
+              {allFailedSelected ? "Deselect all" : "Select all failed"}
+            </button>
+            {selectedForDelete.size > 0 && (
+              <>
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                  {selectedForDelete.size} selected
+                </span>
+                <button
+                  type="button"
+                  onClick={deleteSelected}
+                  disabled={deleting}
+                  className="rounded border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50 dark:border-red-900 dark:bg-red-950/50 dark:text-red-300 dark:hover:bg-red-900/50"
+                >
+                  {deleting ? "Deleting…" : "Delete selected"}
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead>
             <tr className="border-b border-zinc-200 bg-zinc-50/80 dark:border-zinc-700 dark:bg-zinc-800/80">
+              <th className="w-8 px-2 py-3" aria-label="Select for delete" />
               <th className="w-10 px-2 py-3" aria-label="Expand" />
               <th className="px-4 py-3 font-medium text-zinc-700 dark:text-zinc-300">
                 Template
@@ -416,7 +490,7 @@ export function JobsList() {
           <tbody>
             {jobs.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
+                <td colSpan={8} className="px-4 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
                   No jobs match the current filters.
                 </td>
               </tr>
@@ -424,6 +498,19 @@ export function JobsList() {
               jobs.map((j) => (
               <Fragment key={j.id}>
                 <tr className="border-b border-zinc-100 dark:border-zinc-700/50">
+                  <td className="px-2 py-3">
+                    {j.status === JOB_STATUS.FAILED ? (
+                      <input
+                        type="checkbox"
+                        checked={selectedForDelete.has(j.id)}
+                        onChange={() => toggleSelectFailed(j.id)}
+                        aria-label={`Select job ${j.templateName} for delete`}
+                        className="h-4 w-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-500 dark:border-zinc-600 dark:bg-zinc-800"
+                      />
+                    ) : (
+                      <span className="inline-block w-4" aria-hidden />
+                    )}
+                  </td>
                   <td className="px-2 py-3">
                     <button
                       type="button"
@@ -486,7 +573,7 @@ export function JobsList() {
                 </tr>
                 {expandedId === j.id && (
                   <tr className="border-b border-zinc-100 bg-zinc-50/50 dark:border-zinc-700/50 dark:bg-zinc-800/30">
-                    <td colSpan={7} className="px-4 py-4">
+                    <td colSpan={8} className="px-4 py-4">
                       {detailsLoading === j.id ? (
                         <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading details…</p>
                       ) : (

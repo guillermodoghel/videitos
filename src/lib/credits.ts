@@ -1,4 +1,5 @@
 import { parseTemplateConfig } from "@/lib/video-models";
+import { RUNWAY_IMAGE_TO_VIDEO_IDS } from "@/lib/video-models";
 
 /**
  * Credit system: API cost constants and our pricing (multiplier).
@@ -70,24 +71,52 @@ export function computeJobCost(input: JobCostInput): JobCostResult {
 }
 
 /**
+ * Normalize model id so it matches API_CREDITS_PER_SECOND keys (e.g. DB stored "Veo3.1" -> "veo3.1").
+ * Returns the canonical id from RUNWAY_IMAGE_TO_VIDEO_IDS or the original if no match.
+ */
+function normalizeModelId(model: string): string {
+  const trimmed = model?.trim() ?? "";
+  const lower = trimmed.toLowerCase();
+  const canonical = (RUNWAY_IMAGE_TO_VIDEO_IDS as readonly string[]).find(
+    (id) => id.toLowerCase() === lower
+  );
+  return canonical ?? trimmed;
+}
+
+/**
  * Estimated credits per video for a template, based on its model and config.
  * Uses parseTemplateConfig for duration, audio, and preGen. Safe to call with any config shape.
+ * Always returns the platform credit cost (what the user pays when not using their own Runway key).
+ * If the stored model string doesn't match our keys, we normalize it so known Runway models never show 0.
  */
 export function getTemplateEstimatedCredits(
   model: string,
   config: unknown
 ): number {
-  const parsed = parseTemplateConfig(model, config);
+  const normalizedModel = normalizeModelId(model);
+  const parsed = parseTemplateConfig(normalizedModel, config);
   const hasPreGen = !!(
     parsed.preGen?.prompt &&
     parsed.preGen.referenceImageUrls &&
     parsed.preGen.referenceImageUrls.length >= 1
   );
   const { creditCost } = computeJobCost({
-    model,
+    model: normalizedModel,
     durationSeconds: parsed.durationSeconds,
     audio: parsed.audio,
     hasPreGen,
   });
-  return creditCost;
+  if (creditCost > 0) return creditCost;
+  // Avoid showing 0 for known Runway models (e.g. legacy model string or bad config)
+  const isKnownRunway = (RUNWAY_IMAGE_TO_VIDEO_IDS as readonly string[]).includes(normalizedModel);
+  if (isKnownRunway) {
+    const fallback = computeJobCost({
+      model: normalizedModel,
+      durationSeconds: 8,
+      audio: true,
+      hasPreGen: false,
+    });
+    return fallback.creditCost;
+  }
+  return 0;
 }
