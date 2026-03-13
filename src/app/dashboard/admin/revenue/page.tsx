@@ -6,8 +6,10 @@ import { CREDITS_PER_DOLLAR } from "@/lib/stripe";
 
 const STRIPE_PERCENT = 0.029;
 const STRIPE_FIXED_CENTS = 30;
-/** Optional: USD per internal API credit (Runway cost). Set in env for $ display. */
-const RUNWAY_USD_PER_API_CREDIT = 0.01
+/** Optional: USD per Runway API credit (for reference). Set in env to show "your cost to buy" estimate. */
+const RUNWAY_USD_PER_API_CREDIT = process.env.RUNWAY_USD_PER_API_CREDIT
+  ? parseFloat(process.env.RUNWAY_USD_PER_API_CREDIT)
+  : null;
 
 /** Gain parts of 2.5: 1 (cost recovery) + 1 + 0.5. We attribute net revenue to the +1 and +0.5 parts proportionally. */
 const GAIN_ONE = 1;
@@ -59,7 +61,8 @@ export default async function AdminRevenuePage() {
       ? totalApiCredits * RUNWAY_USD_PER_API_CREDIT
       : 0;
 
-  const netRevenueUsd = incomeUsd - stripeEstimateUsd - runwayCostUsd;
+  // Formula: sell Runway credits at 2.5× (user credits), minus Stripe = revenue. Runway $ is not subtracted.
+  const netRevenueUsd = incomeUsd - stripeEstimateUsd;
   const gainOneShare = GAIN_ONE / GAIN_TOTAL;
   const gainHalfShare = GAIN_HALF / GAIN_TOTAL;
   const revenueFromPlus1 = netRevenueUsd * gainOneShare;
@@ -107,20 +110,19 @@ export default async function AdminRevenuePage() {
 
         <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-700 dark:bg-zinc-900">
           <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
-            Runway cost (API credits)
+            Runway credits to purchase
           </p>
           <p className="mt-1 text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
             {formatCredits(totalApiCredits)} credits
           </p>
+          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+            Actual Runway (API) credits consumed — you sell these at {CREDIT_MULTIPLIER}× to users
+          </p>
           {RUNWAY_USD_PER_API_CREDIT != null && Number.isFinite(RUNWAY_USD_PER_API_CREDIT) ? (
-            <p className="mt-1 text-sm text-red-600 dark:text-red-400">
-              −{formatUsd(runwayCostUsd)} USD
+            <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+              Your cost to buy: ~{formatUsd(runwayCostUsd)} (ref.)
             </p>
-          ) : (
-            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-              Set RUNWAY_USD_PER_API_CREDIT for $ estimate
-            </p>
-          )}
+          ) : null}
         </div>
       </div>
 
@@ -132,7 +134,7 @@ export default async function AdminRevenuePage() {
           {formatUsd(netRevenueUsd)}
         </p>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          Income − Stripe − Runway
+          Income (sell Runway credits at {CREDIT_MULTIPLIER}×) − Stripe
         </p>
 
         <div className="mt-6 border-t border-zinc-200 pt-6 dark:border-zinc-700">
