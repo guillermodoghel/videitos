@@ -2,18 +2,10 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { CREDIT_KIND } from "@/lib/constants/credit-transaction-kind";
 import { CREDIT_MULTIPLIER } from "@/lib/credits";
-import { CREDITS_PER_DOLLAR } from "@/lib/stripe";
+import { getStripeRevenueFromExternalIds } from "@/lib/stripe-revenue";
 
-/** If set (e.g. 0.059 for 5.9%), Stripe fee = income × this. Else: 2.9% + $0.30 per transaction. */
-const STRIPE_FEE_PERCENT = process.env.STRIPE_FEE_PERCENT
-  ? parseFloat(process.env.STRIPE_FEE_PERCENT)
-  : null;
-const STRIPE_PERCENT = 0.029;
-const STRIPE_FIXED_CENTS = 30;
-/** USD per Runway API credit. Required for real revenue (amount that goes to buy Runway credits). e.g. 8/60 ≈ 0.1333 if 60 credits cost $8. */
-const RUNWAY_USD_PER_API_CREDIT = process.env.RUNWAY_USD_PER_API_CREDIT
-  ? parseFloat(process.env.RUNWAY_USD_PER_API_CREDIT)
-  : null;
+/** USD per Runway API credit (cost to buy). 60 credits = $80 → 80/60 per credit. */
+const RUNWAY_USD_PER_API_CREDIT = 80 / 60;
 
 /** Gain parts of 2.5: 1 (cost recovery) + 1 + 0.5. We attribute net revenue to the +1 and +0.5 parts proportionally. */
 const GAIN_ONE = 1;
@@ -34,14 +26,15 @@ function formatCredits(n: number): string {
 }
 
 export default async function AdminRevenuePage() {
-  const [purchaseAgg, jobAgg] = await Promise.all([
-    prisma.creditTransaction.groupBy({
-      by: ["kind"],
+  const [transactions, jobAgg] = await Promise.all([
+    prisma.creditTransaction.findMany({
       where: {
         kind: { in: [CREDIT_KIND.PURCHASE, CREDIT_KIND.AUTO_RECHARGE] },
+        externalId: { not: null },
       },
-      _sum: { amount: true },
-      _count: true,
+      select: { externalId: true, amount: true },
+      orderBy: { createdAt: "desc" },
+      take: 500,
     }),
     prisma.job.aggregate({
       where: { apiCost: { not: null } },
@@ -49,24 +42,38 @@ export default async function AdminRevenuePage() {
     }),
   ]);
 
-  const totalCreditsPurchased = purchaseAgg.reduce(
-    (acc, row) => acc + Number(row._sum.amount ?? 0),
-    0
-  );
-  const purchaseCount = purchaseAgg.reduce((acc, row) => acc + row._count, 0);
+  const externalIds = transactions.map((t) => t.externalId).filter((id): id is string => id != null);
+  const totalCreditsPurchased = transactions.reduce((acc, t) => acc + Number(t.amount), 0);
 
-  const incomeUsd = totalCreditsPurchased / CREDITS_PER_DOLLAR;
-  const stripeFeeUsd =
-    STRIPE_FEE_PERCENT != null && Number.isFinite(STRIPE_FEE_PERCENT)
-      ? incomeUsd * STRIPE_FEE_PERCENT
-      : incomeUsd * STRIPE_PERCENT + (purchaseCount * STRIPE_FIXED_CENTS) / 100;
-  const netAfterStripeUsd = incomeUsd - stripeFeeUsd;
+  let incomeUsd: number;
+  let stripeFeeUsd: number;
+  let netAfterStripeUsd: number;
+  let stripeSource: "stripe" | "estimate" = "estimate";
+  let stripeNote: string | undefined;
+
+  try {
+    const stripeRevenue = await getStripeRevenueFromExternalIds(externalIds);
+    if (stripeRevenue.transactionCount > 0) {
+      incomeUsd = stripeRevenue.incomeUsd;
+      stripeFeeUsd = stripeRevenue.stripeFeeUsd;
+      netAfterStripeUsd = stripeRevenue.netUsd;
+      stripeSource = "stripe";
+      stripeNote = stripeRevenue.note;
+    } else {
+      incomeUsd = totalCreditsPurchased / 100;
+      stripeFeeUsd = incomeUsd * 0.029 + (transactions.length * 30) / 100;
+      netAfterStripeUsd = incomeUsd - stripeFeeUsd;
+      stripeNote = "Stripe data unavailable; using estimate";
+    }
+  } catch {
+    incomeUsd = totalCreditsPurchased / 100;
+    stripeFeeUsd = incomeUsd * 0.029 + (transactions.length * 30) / 100;
+    netAfterStripeUsd = incomeUsd - stripeFeeUsd;
+    stripeNote = "Stripe API error; using estimate";
+  }
 
   const totalApiCredits = Number(jobAgg._sum.apiCost ?? 0);
-  const runwayCostUsd =
-    RUNWAY_USD_PER_API_CREDIT != null && Number.isFinite(RUNWAY_USD_PER_API_CREDIT)
-      ? totalApiCredits * RUNWAY_USD_PER_API_CREDIT
-      : 0;
+  const runwayCostUsd = totalApiCredits * RUNWAY_USD_PER_API_CREDIT;
 
   // Real revenue = Income − Stripe − Runway cost (amount that goes to buy Runway credits). Split this into +1 and +0.5.
   const realRevenueUsd = netAfterStripeUsd - runwayCostUsd;
@@ -99,7 +106,7 @@ export default async function AdminRevenuePage() {
           </p>
           <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
             {formatCredits(totalCreditsPurchased)} credits sold
-            {purchaseCount > 0 && ` · ${purchaseCount} transaction${purchaseCount === 1 ? "" : "s"}`}
+            {transactions.length > 0 && ` · ${transactions.length} transaction${transactions.length === 1 ? "" : "s"}`}
           </p>
         </div>
 
@@ -111,9 +118,8 @@ export default async function AdminRevenuePage() {
             −{formatUsd(stripeFeeUsd)}
           </p>
           <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-            {STRIPE_FEE_PERCENT != null && Number.isFinite(STRIPE_FEE_PERCENT)
-              ? `${(STRIPE_FEE_PERCENT * 100).toFixed(1)}% of payment`
-              : `${(STRIPE_PERCENT * 100).toFixed(1)}% + $${STRIPE_FIXED_CENTS / 100} per transaction`}
+            {stripeSource === "stripe" ? "From Stripe (real)" : "Estimate"}
+            {stripeNote && ` · ${stripeNote}`}
           </p>
         </div>
 
@@ -127,15 +133,9 @@ export default async function AdminRevenuePage() {
           <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
             Runway (API) credits consumed — you sell at {CREDIT_MULTIPLIER}× to users
           </p>
-          {RUNWAY_USD_PER_API_CREDIT != null && Number.isFinite(RUNWAY_USD_PER_API_CREDIT) ? (
-            <p className="mt-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
-              → {formatUsd(runwayCostUsd)} to buy these (goes out of revenue)
-            </p>
-          ) : (
-            <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
-              Set RUNWAY_USD_PER_API_CREDIT for real revenue
-            </p>
-          )}
+          <p className="mt-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+            → {formatUsd(runwayCostUsd)} to buy these (goes out of revenue)
+          </p>
         </div>
       </div>
 
@@ -156,18 +156,14 @@ export default async function AdminRevenuePage() {
             <dt className="text-zinc-500 dark:text-zinc-400">Net amount</dt>
             <dd className="font-medium text-zinc-900 dark:text-zinc-50">{formatUsd(netAfterStripeUsd)}</dd>
           </div>
-          {RUNWAY_USD_PER_API_CREDIT != null && Number.isFinite(RUNWAY_USD_PER_API_CREDIT) && (
-            <>
-              <div className="flex justify-between gap-4">
-                <dt className="text-zinc-500 dark:text-zinc-400">Runway credits to purchase</dt>
-                <dd className="font-medium text-red-600 dark:text-red-400">−{formatUsd(runwayCostUsd)}</dd>
-              </div>
-              <div className="flex justify-between gap-4 border-t border-zinc-200 pt-2 dark:border-zinc-700">
-                <dt className="font-medium text-zinc-700 dark:text-zinc-300">Real revenue (to split)</dt>
-                <dd className="text-lg font-semibold text-emerald-600 dark:text-emerald-400">{formatUsd(realRevenueUsd)}</dd>
-              </div>
-            </>
-          )}
+          <div className="flex justify-between gap-4">
+            <dt className="text-zinc-500 dark:text-zinc-400">Runway credits to purchase</dt>
+            <dd className="font-medium text-red-600 dark:text-red-400">−{formatUsd(runwayCostUsd)}</dd>
+          </div>
+          <div className="flex justify-between gap-4 border-t border-zinc-200 pt-2 dark:border-zinc-700">
+            <dt className="font-medium text-zinc-700 dark:text-zinc-300">Real revenue (to split)</dt>
+            <dd className="text-lg font-semibold text-emerald-600 dark:text-emerald-400">{formatUsd(realRevenueUsd)}</dd>
+          </div>
         </dl>
 
         <div className="mt-6 border-t border-zinc-200 pt-6 dark:border-zinc-700">
