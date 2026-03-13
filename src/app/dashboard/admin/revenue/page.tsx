@@ -4,8 +4,8 @@ import { CREDIT_KIND } from "@/lib/constants/credit-transaction-kind";
 import { CREDIT_MULTIPLIER } from "@/lib/credits";
 import { getStripeRevenueFromExternalIds } from "@/lib/stripe-revenue";
 
-/** USD per Runway API credit (cost to buy). 60 credits = $80 → 80/60 per credit. */
-const RUNWAY_USD_PER_API_CREDIT = 80 / 60;
+/** USD per Runway API credit (cost to buy). $8 buys 800 credits → $0.01 per credit. */
+const RUNWAY_USD_PER_API_CREDIT = 0.01;
 
 /** Gain parts of 2.5: 1 (cost recovery) + 1 + 0.5. We attribute net revenue to the +1 and +0.5 parts proportionally. */
 const GAIN_ONE = 1;
