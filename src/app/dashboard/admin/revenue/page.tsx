@@ -7,9 +7,7 @@ import { CREDITS_PER_DOLLAR } from "@/lib/stripe";
 const STRIPE_PERCENT = 0.029;
 const STRIPE_FIXED_CENTS = 30;
 /** Optional: USD per Runway API credit (for reference). Set in env to show "your cost to buy" estimate. */
-const RUNWAY_USD_PER_API_CREDIT = process.env.RUNWAY_USD_PER_API_CREDIT
-  ? parseFloat(process.env.RUNWAY_USD_PER_API_CREDIT)
-  : null;
+const RUNWAY_USD_PER_API_CREDIT = 0.01 // 1 credit = $0.01
 
 /** Gain parts of 2.5: 1 (cost recovery) + 1 + 0.5. We attribute net revenue to the +1 and +0.5 parts proportionally. */
 const GAIN_ONE = 1;
