@@ -15,8 +15,8 @@ import { RUNWAY_IMAGE_TO_VIDEO_IDS } from "@/lib/video-models";
  * We charge CREDIT_MULTIPLIER × API cost.
  */
 
-/** Multiplier applied to API cost for user-facing credits (e.g. 2.5 = charge 2.5×). */
-export const CREDIT_MULTIPLIER = 2.5;
+/** Multiplier applied to API cost for user-facing credits (e.g. 3 = charge 3×). */
+export const CREDIT_MULTIPLIER = 3;
 
 /** API credits per second by model. veo3.1/veo3.1_fast depend on audio. */
 export const API_CREDITS_PER_SECOND: Record<

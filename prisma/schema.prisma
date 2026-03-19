@@ -85,16 +85,18 @@ model Job {
 }
 
 model CreditTransaction {
-  id          String    @id @default(cuid())
-  userId      String
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  amount      Decimal   @db.Decimal(14, 4) // positive = grant, negative = spend
-  jobId       String?   // set when amount is a spend for this job
-  job         Job?      @relation(fields: [jobId], references: [id], onDelete: SetNull)
-  kind        String    // "grant" | "spend" | "purchase" | "auto_recharge"
-  description String?
-  externalId  String?   @unique // Stripe PaymentIntent ID for dedup
-  createdAt   DateTime  @default(now())
+  id                    String    @id @default(cuid())
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount                Decimal   @db.Decimal(14, 4) // positive = grant, negative = spend
+  jobId                 String?   // set when amount is a spend for this job
+  job                   Job?      @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  kind                  String    // "grant" | "spend" | "purchase" | "auto_recharge"
+  description           String?
+  externalId            String?   @unique // Stripe PaymentIntent ID for dedup
+  stripeNetAmountCents  Int?      // net amount after Stripe fees (for purchase/auto_recharge), from webhook
+  stripeFeeCents        Int?      // Stripe fee for this transaction (for purchase/auto_recharge), from webhook
+  createdAt             DateTime  @default(now())
 
   @@schema("videitos")
 }

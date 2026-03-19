@@ -31,6 +31,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
+  console.log("[stripe-webhook] Event:", event.type);
   try {
     switch (event.type) {
       case "checkout.session.completed":
@@ -55,6 +56,24 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ received: true });
+}
+
+/** Get Stripe net and fee (cents) from a PaymentIntent. Returns null if unavailable. */
+async function getStripeBalanceFromPaymentIntent(
+  piId: string
+): Promise<{ netCents: number; feeCents: number } | null> {
+  try {
+    const pi = await stripe.paymentIntents.retrieve(piId, {
+      expand: ["latest_charge.balance_transaction"],
+    });
+    const charge = pi.latest_charge;
+    if (!charge || typeof charge === "string") return null;
+    const bt = charge.balance_transaction;
+    if (!bt || typeof bt === "string") return null;
+    return { netCents: bt.net, feeCents: bt.fee };
+  } catch {
+    return null;
+  }
 }
 
 /** Returns false if user does not exist (event may be for another product sharing the webhook). */
@@ -112,7 +131,17 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
 
   // Use PaymentIntent id when present so we share idempotency with payment_intent.succeeded (saved-card flow uses PI only)
   const externalId = paymentIntentId ? `pi_${paymentIntentId}` : `checkout_${session.id}`;
-  const granted = await grantCredits(userId, creditsToGrant, CREDIT_KIND.PURCHASE, "Credit purchase", externalId);
+  const stripeData = paymentIntentId
+    ? await getStripeBalanceFromPaymentIntent(paymentIntentId)
+    : null;
+  const granted = await grantCredits(
+    userId,
+    creditsToGrant,
+    CREDIT_KIND.PURCHASE,
+    "Credit purchase",
+    externalId,
+    stripeData
+  );
   if (granted) {
     const n = await resumeInsufficientCreditsJobs(userId);
     if (n > 0) console.log("[stripe-webhook] Re-queued %s job(s) after purchase (user=%s)", n, userId);
@@ -137,10 +166,18 @@ async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
   }
 
   const externalId = `pi_${pi.id}`;
+  const stripeData = await getStripeBalanceFromPaymentIntent(pi.id);
 
   if (type === STRIPE_PI_TYPE.CREDIT_PURCHASE) {
     // Saved-card purchase (no Checkout); Checkout flow grants in checkout.session.completed with same pi_ id → deduped
-    const granted = await grantCredits(userId, creditsToGrant, CREDIT_KIND.PURCHASE, "Credit purchase", externalId);
+    const granted = await grantCredits(
+      userId,
+      creditsToGrant,
+      CREDIT_KIND.PURCHASE,
+      "Credit purchase",
+      externalId,
+      stripeData
+    );
     if (granted) {
       const n = await resumeInsufficientCreditsJobs(userId);
       if (n > 0) console.log("[stripe-webhook] Re-queued %s job(s) after purchase (user=%s)", n, userId);
@@ -149,7 +186,14 @@ async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
   }
 
   // AUTO_RECHARGE
-  const granted = await grantCredits(userId, creditsToGrant, CREDIT_KIND.AUTO_RECHARGE, "Auto-recharge", externalId);
+  const granted = await grantCredits(
+    userId,
+    creditsToGrant,
+    CREDIT_KIND.AUTO_RECHARGE,
+    "Auto-recharge",
+    externalId,
+    stripeData
+  );
   if (granted) {
     const n = await resumeInsufficientCreditsJobs(userId);
     if (n > 0) console.log("[stripe-webhook] Re-queued %s job(s) after auto-recharge (user=%s)", n, userId);
@@ -197,7 +241,8 @@ async function grantCredits(
   credits: number,
   kind: string,
   description: string,
-  externalId: string
+  externalId: string,
+  stripeData?: { netCents: number; feeCents: number } | null
 ): Promise<boolean> {
   const existing = await prisma.creditTransaction.findUnique({
     where: { externalId },
@@ -220,6 +265,14 @@ async function grantCredits(
         kind,
         description,
         externalId,
+        ...(stripeData &&
+        Number.isInteger(stripeData.netCents) &&
+        Number.isInteger(stripeData.feeCents)
+          ? {
+              stripeNetAmountCents: stripeData.netCents,
+              stripeFeeCents: stripeData.feeCents,
+            }
+          : {}),
       },
     });
   });
