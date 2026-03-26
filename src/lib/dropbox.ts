@@ -120,6 +120,14 @@ const DEFAULT_EXPIRES_IN_SEC = 14400;
  * is not connected to Dropbox or refresh fails (e.g. revoked).
  */
 export async function getValidAccessToken(userId: string): Promise<string | null> {
+  return getValidAccessTokenWithOptions(userId, {});
+}
+
+export async function getValidAccessTokenWithOptions(
+  userId: string,
+  options: { forceRefresh?: boolean } = {}
+): Promise<string | null> {
+  const { forceRefresh = false } = options;
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: {
@@ -134,7 +142,7 @@ export async function getValidAccessToken(userId: string): Promise<string | null
   const expiresAt = user.dropboxTokenExpiresAt?.getTime() ?? 0;
   const shouldRefresh =
     !!user.dropboxRefreshToken &&
-    (expiresAt === 0 || expiresAt <= now + REFRESH_BUFFER_MS);
+    (forceRefresh || expiresAt === 0 || expiresAt <= now + REFRESH_BUFFER_MS);
 
   if (shouldRefresh) {
     try {
@@ -150,7 +158,16 @@ export async function getValidAccessToken(userId: string): Promise<string | null
         },
       });
       return newToken;
-    } catch {
+    } catch (err) {
+      console.error("[Dropbox token] refresh failed", {
+        userId,
+        forceRefresh,
+        hasRefreshToken: !!user.dropboxRefreshToken,
+        expiresAt: user.dropboxTokenExpiresAt?.toISOString() ?? null,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      const tokenExpired = expiresAt !== 0 && expiresAt <= now;
+      if (forceRefresh || tokenExpired) return null;
       return user.dropboxAccessToken;
     }
   }
@@ -338,24 +355,34 @@ export async function uploadFile(
   accessToken: string,
   path: string,
   body: Buffer,
-  options: { mode?: "add" | "overwrite" } = {}
+  options: {
+    mode?: "add" | "overwrite";
+    onUnauthorized?: () => Promise<string | null>;
+    maxRetries?: number;
+  } = {}
 ): Promise<{ path_display?: string } | null> {
   const safePath = sanitizePathForHeader(path.replace(/\/$/, ""));
-  const res = await fetch(`${DROPBOX_CONTENT}/files/upload`, {
-    method: "POST",
-    headers: {
-      Authorization: toLatin1Header(`Bearer ${accessToken}`),
-      "Content-Type": "application/octet-stream",
-      "Dropbox-API-Arg": toLatin1Header(
-        JSON.stringify({
-          path: safePath,
-          mode: options.mode ?? "add",
-        })
-      ),
-    },
-    body: new Uint8Array(body),
-  });
-  if (!res.ok) {
+  const maxRetries = Math.max(0, options.maxRetries ?? 2);
+  let token = accessToken;
+  let didForceRefresh = false;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const res = await fetch(`${DROPBOX_CONTENT}/files/upload`, {
+      method: "POST",
+      headers: {
+        Authorization: toLatin1Header(`Bearer ${token}`),
+        "Content-Type": "application/octet-stream",
+        "Dropbox-API-Arg": toLatin1Header(
+          JSON.stringify({
+            path: safePath,
+            mode: options.mode ?? "add",
+          })
+        ),
+      },
+      body: new Uint8Array(body),
+    });
+    if (res.ok) return res.json();
+
     const errText = await res.text();
     let errJson: unknown;
     try {
@@ -363,12 +390,36 @@ export async function uploadFile(
     } catch {
       errJson = errText;
     }
+    const requestId = res.headers.get("x-dropbox-request-id");
+    const retryAfter = res.headers.get("retry-after");
+    const isRetryable = res.status === 429 || res.status >= 500;
     console.error("[Dropbox upload] failed", {
       status: res.status,
-      path: safePath.slice(0, 100) + (safePath.length > 100 ? "…" : ""),
+      attempt: attempt + 1,
+      maxAttempts: maxRetries + 1,
+      requestId,
+      retryAfter,
+      pathPreview: safePath.slice(0, 140) + (safePath.length > 140 ? "…" : ""),
+      pathChangedBySanitizer: safePath !== path.replace(/\/$/, ""),
       error: errJson,
     });
-    return null;
+
+    if (res.status === 401 && options.onUnauthorized && !didForceRefresh) {
+      didForceRefresh = true;
+      const refreshed = await options.onUnauthorized();
+      if (refreshed) {
+        token = refreshed;
+        continue;
+      }
+      return null;
+    }
+
+    if (!isRetryable || attempt === maxRetries) return null;
+    const retryAfterSeconds = retryAfter ? Number(retryAfter) : NaN;
+    const waitMs = Number.isFinite(retryAfterSeconds)
+      ? Math.max(0, retryAfterSeconds * 1000)
+      : 500 * Math.pow(2, attempt);
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
-  return res.json();
+  return null;
 }

@@ -6,7 +6,7 @@ import { isRunwayImageToVideoModel } from "@/lib/video-models";
 import { parseTemplateConfig } from "@/lib/video-models";
 import { computeJobCost } from "@/lib/credits";
 import { getRunwayApiKeyForUser, usesPlatformKey } from "@/lib/runway-api-key";
-import { getValidAccessToken, uploadFile } from "@/lib/dropbox";
+import { getValidAccessToken, getValidAccessTokenWithOptions, uploadFile } from "@/lib/dropbox";
 import { maybeAutoRecharge } from "@/lib/stripe";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { WEBHOOK_JOB_STATUS } from "@/lib/constants/webhook-job-status";
@@ -138,11 +138,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Dropbox not connected" }, { status: 500 });
   }
 
-  const baseName = job.dropboxSourceFilePath.split("/").pop()?.replace(/\.[^.]+$/, "") ?? "video";
+  const rawBaseName = job.dropboxSourceFilePath.split("/").pop()?.replace(/\.[^.]+$/, "") ?? "video";
+  const baseName = sanitizeOutputFileBaseName(rawBaseName);
   const outputFileName = `${baseName}-${Date.now()}.mp4`;
   const outputPath = destPath.endsWith("/") ? `${destPath}${outputFileName}` : `${destPath}/${outputFileName}`;
 
-  const uploadResult = await uploadFile(token, outputPath, videoBuffer, { mode: "add" });
+  const uploadResult = await uploadFile(token, outputPath, videoBuffer, {
+    mode: "add",
+    onUnauthorized: () =>
+      getValidAccessTokenWithOptions(job.userId, { forceRefresh: true }),
+    maxRetries: 2,
+  });
   if (!uploadResult) {
     console.error("[webhook/job] Upload failed", {
       jobId: job.id,
@@ -153,7 +159,7 @@ export async function POST(request: NextRequest) {
       where: { id: job.id },
       data: {
         status: JOB_STATUS.FAILED,
-        errorMessage: "Failed to upload to Dropbox",
+        errorMessage: JOB_ERROR.DROPBOX_UPLOAD_FAILED,
         completedAt: new Date(),
       },
     });
@@ -211,6 +217,16 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ ok: true, outputDropboxPath: outputPath });
+}
+
+function sanitizeOutputFileBaseName(input: string): string {
+  const normalized = input.normalize("NFKC");
+  const cleaned = normalized
+    .replace(/[\u0000-\u001F\u007F]/g, "") // control chars
+    .replace(/[\\/:"*<>|]/g, "_") // problematic separators/specials
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned.length > 0 ? cleaned.slice(0, 120) : "video";
 }
 
 async function findJob(
