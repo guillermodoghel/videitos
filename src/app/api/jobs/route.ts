@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSessionUserId } from "@/lib/auth";
+import { getSessionUser, getSessionUserId } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { JOB_STATUS } from "@/lib/constants/job-status";
+import { USER_ROLE } from "@/lib/constants/user-role";
 
 const DEFAULT_PER_PAGE = 10;
 const MIN_PER_PAGE = 5;
@@ -14,10 +15,12 @@ const MAX_PER_PAGE = 100;
  * Returns jobs, total, page, perPage.
  */
 export async function GET(request: NextRequest) {
-  const userId = await getSessionUserId();
-  if (!userId) {
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const userId = sessionUser.id;
+  const isAdmin = sessionUser.role === USER_ROLE.ADMIN;
 
   const { searchParams } = new URL(request.url);
   const page = Math.max(1, parseInt(searchParams.get("page") ?? "1", 10) || 1);
@@ -25,11 +28,20 @@ export async function GET(request: NextRequest) {
   perPage = Math.min(MAX_PER_PAGE, Math.max(MIN_PER_PAGE, perPage));
   const model = searchParams.get("model")?.trim() || null;
   const status = searchParams.get("status")?.trim() || null;
+  const userQuery = searchParams.get("user")?.trim() || null;
 
   const where = {
-    userId,
+    ...(isAdmin ? {} : { userId }),
     ...(status ? { status } : {}),
     ...(model ? { template: { model } } : {}),
+    ...(isAdmin && userQuery
+      ? {
+          OR: [
+            { user: { email: { contains: userQuery, mode: "insensitive" as const } } },
+            { userId: { contains: userQuery, mode: "insensitive" as const } },
+          ],
+        }
+      : {}),
   };
 
   const activeStatuses = [JOB_STATUS.QUEUED, JOB_STATUS.PROCESSING, JOB_STATUS.SENT_TO_VEO];
@@ -42,11 +54,23 @@ export async function GET(request: NextRequest) {
       take: perPage,
       include: {
         template: { select: { name: true, model: true } },
+        user: { select: { email: true } },
       },
     }),
     prisma.job.count({ where }),
     prisma.job.count({
-      where: { userId, status: { in: activeStatuses } },
+      where: {
+        ...(isAdmin ? {} : { userId }),
+        status: { in: activeStatuses },
+        ...(isAdmin && userQuery
+          ? {
+              OR: [
+                { user: { email: { contains: userQuery, mode: "insensitive" as const } } },
+                { userId: { contains: userQuery, mode: "insensitive" as const } },
+              ],
+            }
+          : {}),
+      },
     }),
   ]);
 
@@ -54,6 +78,8 @@ export async function GET(request: NextRequest) {
     id: j.id,
     status: j.status,
     templateName: j.template.name,
+    userEmail: j.user.email,
+    userId: j.userId,
     model: j.template.model,
     dropboxSourceFilePath: j.dropboxSourceFilePath,
     outputDropboxPath: j.outputDropboxPath,
@@ -73,6 +99,7 @@ export async function GET(request: NextRequest) {
     perPage,
     /** True if user has any job queued or in progress; frontend uses this to decide whether to keep polling. */
     hasActiveJobs: activeCount > 0,
+    isAdmin,
   });
 }
 

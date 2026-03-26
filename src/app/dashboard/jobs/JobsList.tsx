@@ -6,6 +6,8 @@ import { JOB_STATUS } from "@/lib/constants/job-status";
 
 type JobRow = {
   id: string;
+  userEmail?: string;
+  userId?: string;
   status: string;
   templateName: string;
   model: string;
@@ -218,7 +220,7 @@ function JobDetailsPanel({ job, details }: { job: JobRow; details?: JobDetails |
   );
 }
 
-export function JobsList() {
+export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [total, setTotal] = useState(0);
   const [hasActiveJobs, setHasActiveJobs] = useState(false);
@@ -226,6 +228,7 @@ export function JobsList() {
   const [perPage, setPerPage] = useState(DEFAULT_PER_PAGE);
   const [filterModel, setFilterModel] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
+  const [filterUser, setFilterUser] = useState("");
   const [loading, setLoading] = useState(true);
   const [pollingEnabled, setPollingEnabled] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -248,6 +251,7 @@ export function JobsList() {
       const params = new URLSearchParams({ page: String(page), perPage: String(perPage) });
       if (filterModel) params.set("model", filterModel);
       if (filterStatus) params.set("status", filterStatus);
+      if (isAdmin && filterUser.trim()) params.set("user", filterUser.trim());
       const res = await fetch(`/api/jobs?${params}`);
       if (res.ok) {
         const data = await res.json();
@@ -264,17 +268,16 @@ export function JobsList() {
 
   useEffect(() => {
     fetchJobs();
-  }, [page, perPage, filterModel, filterStatus]);
+  }, [page, perPage, filterModel, filterStatus, filterUser, isAdmin]);
 
   // Poll only when user wants it and backend says there are active jobs (queued/processing)
   useEffect(() => {
     if (!pollingEnabled || !hasActiveJobs) return;
     const t = setInterval(fetchJobs, POLL_INTERVAL_MS);
     return () => clearInterval(t);
-  }, [pollingEnabled, hasActiveJobs, page, perPage, filterModel, filterStatus]);
+  }, [pollingEnabled, hasActiveJobs, page, perPage, filterModel, filterStatus, filterUser, isAdmin]);
 
   const failedOnPage = jobs.filter((j) => j.status === JOB_STATUS.FAILED);
-  const failedIds = new Set(failedOnPage.map((j) => j.id));
   const allFailedSelected = failedOnPage.length > 0 && failedOnPage.every((j) => selectedForDelete.has(j.id));
 
   function toggleSelectFailed(jobId: string) {
@@ -434,6 +437,21 @@ export function JobsList() {
             ))}
           </select>
         </label>
+        {isAdmin && (
+          <label className="flex items-center gap-2 text-sm">
+            <span className="text-zinc-600 dark:text-zinc-400">User</span>
+            <input
+              type="text"
+              value={filterUser}
+              onChange={(e) => {
+                setFilterUser(e.target.value);
+                setPage(1);
+              }}
+              placeholder="email or user id"
+              className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-zinc-900 placeholder:text-zinc-400 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500"
+            />
+          </label>
+        )}
         {failedOnPage.length > 0 && (
           <div className="flex items-center gap-2 border-l border-zinc-200 pl-3 dark:border-zinc-700">
             <button
@@ -467,6 +485,11 @@ export function JobsList() {
             <tr className="border-b border-zinc-200 bg-zinc-50/80 dark:border-zinc-700 dark:bg-zinc-800/80">
               <th className="w-8 px-2 py-3" aria-label="Select for delete" />
               <th className="w-10 px-2 py-3" aria-label="Expand" />
+              {isAdmin && (
+                <th className="px-4 py-3 font-medium text-zinc-700 dark:text-zinc-300">
+                  User
+                </th>
+              )}
               <th className="px-4 py-3 font-medium text-zinc-700 dark:text-zinc-300">
                 Template
               </th>
@@ -490,7 +513,7 @@ export function JobsList() {
           <tbody>
             {jobs.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
+                <td colSpan={isAdmin ? 9 : 8} className="px-4 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
                   No jobs match the current filters.
                 </td>
               </tr>
@@ -529,6 +552,11 @@ export function JobsList() {
                       </svg>
                     </button>
                   </td>
+                  {isAdmin && (
+                    <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
+                      {j.userEmail ?? j.userId ?? "—"}
+                    </td>
+                  )}
                   <td className="px-4 py-3 text-zinc-900 dark:text-zinc-100">
                     {j.templateName}
                   </td>
@@ -573,7 +601,7 @@ export function JobsList() {
                 </tr>
                 {expandedId === j.id && (
                   <tr className="border-b border-zinc-100 bg-zinc-50/50 dark:border-zinc-700/50 dark:bg-zinc-800/30">
-                    <td colSpan={8} className="px-4 py-4">
+                    <td colSpan={isAdmin ? 9 : 8} className="px-4 py-4">
                       {detailsLoading === j.id ? (
                         <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading details…</p>
                       ) : (

@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSessionUserId } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { startJobWorkflow } from "@/lib/start-job-workflow";
 import { JOB_STATUS } from "@/lib/constants/job-status";
+import { USER_ROLE } from "@/lib/constants/user-role";
 
 const HOSTNAME = process.env.HOSTNAME ?? "http://localhost:3000";
 
@@ -14,10 +15,11 @@ export async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const userId = await getSessionUserId();
-  if (!userId) {
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const isAdmin = sessionUser.role === USER_ROLE.ADMIN;
 
   const { id: jobId } = await params;
   const job = await prisma.job.findUnique({
@@ -28,7 +30,7 @@ export async function POST(
   if (!job) {
     return NextResponse.json({ error: "Job not found" }, { status: 404 });
   }
-  if (job.userId !== userId) {
+  if (!isAdmin && job.userId !== sessionUser.id) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   if (job.status !== JOB_STATUS.FAILED) {
