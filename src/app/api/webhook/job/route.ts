@@ -154,17 +154,48 @@ export async function POST(request: NextRequest) {
   const outputFileName = `${baseName}-${Date.now()}.mp4`;
   const outputPath = destPath.endsWith("/") ? `${destPath}${outputFileName}` : `${destPath}/${outputFileName}`;
 
+  let videoUriHost: string | null = null;
+  try {
+    videoUriHost = new URL(videoUri).hostname;
+  } catch {
+    videoUriHost = null;
+  }
+
   const uploadResult = await uploadFile(token, outputPath, videoBuffer, {
     mode: "add",
     onUnauthorized: () =>
       getValidAccessTokenWithOptions(job.userId, { forceRefresh: true }),
     maxRetries: 2,
+    logContext: {
+      source: "webhook/job",
+      jobId: job.id,
+      userId: job.userId,
+      templateId: job.templateId,
+      templateModel: template?.model ?? null,
+      providerOperationId: operationName ?? null,
+      dropboxDestinationPath: destPath,
+      outputPath,
+      dropboxSourceFilePath: job.dropboxSourceFilePath,
+      hasPreGenImage: !!job.preGenImageKey,
+      videoBufferBytes: videoBuffer.byteLength,
+      videoUriLength: videoUri.length,
+      videoUriHost,
+    },
   });
   if (!uploadResult) {
-    console.error("[webhook/job] Upload failed", {
+    console.error("[webhook/job] Dropbox upload failed after uploadFile returned null", {
       jobId: job.id,
+      userId: job.userId,
+      templateId: job.templateId,
+      templateModel: template?.model,
+      providerOperationId: operationName ?? null,
       outputPath,
       destinationPath: destPath,
+      dropboxSourceFilePath: job.dropboxSourceFilePath,
+      videoBufferBytes: videoBuffer.byteLength,
+      videoUriHost,
+      errorMessageStored: JOB_ERROR.DROPBOX_UPLOAD_FAILED,
+      hint: "See preceding [Dropbox upload] logs for status, requestId, and Dropbox error body",
     });
     await prisma.job.update({
       where: { id: job.id },

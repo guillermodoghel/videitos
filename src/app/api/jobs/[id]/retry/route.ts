@@ -4,13 +4,12 @@ import { prisma } from "@/lib/prisma";
 import { startJobWorkflow } from "@/lib/start-job-workflow";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { USER_ROLE } from "@/lib/constants/user-role";
-import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 
 const HOSTNAME = process.env.HOSTNAME ?? "http://localhost:3000";
 
 /**
  * POST /api/jobs/[id]/retry
- * Reset a failed job to queued and start the workflow. Only allowed for failed jobs owned by the current user.
+ * Reset a failed job (including canceled) to queued and start the workflow.
  */
 export async function POST(
   _request: NextRequest,
@@ -25,7 +24,7 @@ export async function POST(
   const { id: jobId } = await params;
   const job = await prisma.job.findUnique({
     where: { id: jobId },
-    select: { id: true, userId: true, status: true, errorMessage: true },
+    select: { id: true, userId: true, status: true },
   });
 
   if (!job) {
@@ -39,9 +38,6 @@ export async function POST(
       { error: `Job cannot be retried (status: ${job.status})` },
       { status: 400 }
     );
-  }
-  if (job.errorMessage === JOB_ERROR.CANCELED) {
-    return NextResponse.json({ error: "Job was canceled" }, { status: 400 });
   }
 
   await prisma.job.update({

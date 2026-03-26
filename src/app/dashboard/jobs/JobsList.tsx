@@ -623,17 +623,15 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                       </button>
                     )}
                     {j.status === JOB_STATUS.FAILED && (
-                      j.errorMessage !== JOB_ERROR.CANCELED && (
-                        <button
-                          type="button"
-                          onClick={() => handleRetry(j.id)}
-                          disabled={retryingId === j.id}
-                          className="rounded border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-                          title="Retry this job"
-                        >
-                          {retryingId === j.id ? "Retrying…" : "Retry"}
-                        </button>
-                      )
+                      <button
+                        type="button"
+                        onClick={() => handleRetry(j.id)}
+                        disabled={retryingId === j.id}
+                        className="rounded border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                        title="Retry this job"
+                      >
+                        {retryingId === j.id ? "Retrying…" : "Retry"}
+                      </button>
                     )}
                   </td>
                 </tr>

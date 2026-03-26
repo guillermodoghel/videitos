@@ -350,6 +350,48 @@ export async function getTemporaryLink(
   return data.link != null ? { link: data.link } : null;
 }
 
+/** Headers Dropbox sends that help support/debug (never log tokens). */
+function dropboxResponseHeadersForLog(res: Response): Record<string, string> {
+  const out: Record<string, string> = {};
+  res.headers.forEach((value, key) => {
+    const k = key.toLowerCase();
+    if (
+      k.startsWith("x-dropbox") ||
+      k === "retry-after" ||
+      k === "www-authenticate" ||
+      k === "content-type" ||
+      k === "content-length"
+    ) {
+      out[key] = value;
+    }
+  });
+  return out;
+}
+
+/** Parse Dropbox JSON error body for logs (see error-handling in HTTP docs). */
+function parseDropboxUploadErrorForLog(errJson: unknown, errText: string): {
+  errorSummary?: string;
+  errorTag?: string;
+  rawBodyPreview: string;
+} {
+  const rawBodyPreview =
+    typeof errText === "string"
+      ? errText.slice(0, 800) + (errText.length > 800 ? "…" : "")
+      : "";
+  if (!errJson || typeof errJson !== "object") {
+    return { rawBodyPreview };
+  }
+  const o = errJson as Record<string, unknown>;
+  const summary = typeof o.error_summary === "string" ? o.error_summary : undefined;
+  const err = o.error;
+  let errorTag: string | undefined;
+  if (err && typeof err === "object") {
+    const tag = (err as { ".tag"?: string })[".tag"];
+    if (typeof tag === "string") errorTag = tag;
+  }
+  return { errorSummary: summary, errorTag, rawBodyPreview };
+}
+
 /** Upload a file to Dropbox. path: full path e.g. "/Folder/out.mp4". mode: "add" (default) or "overwrite". */
 export async function uploadFile(
   accessToken: string,
@@ -359,10 +401,15 @@ export async function uploadFile(
     mode?: "add" | "overwrite";
     onUnauthorized?: () => Promise<string | null>;
     maxRetries?: number;
+    /** Merged into failure logs (e.g. jobId, userId, templateId). */
+    logContext?: Record<string, unknown>;
   } = {}
 ): Promise<{ path_display?: string } | null> {
   const safePath = sanitizePathForHeader(path.replace(/\/$/, ""));
   const maxRetries = Math.max(0, options.maxRetries ?? 2);
+  const mode = options.mode ?? "add";
+  const contentLengthBytes = body.byteLength;
+  const logContext = options.logContext ?? {};
   let token = accessToken;
   let didForceRefresh = false;
 
@@ -375,7 +422,7 @@ export async function uploadFile(
         "Dropbox-API-Arg": toLatin1Header(
           JSON.stringify({
             path: safePath,
-            mode: options.mode ?? "add",
+            mode,
           })
         ),
       },
@@ -393,33 +440,73 @@ export async function uploadFile(
     const requestId = res.headers.get("x-dropbox-request-id");
     const retryAfter = res.headers.get("retry-after");
     const isRetryable = res.status === 429 || res.status >= 500;
-    console.error("[Dropbox upload] failed", {
+    const parsed = parseDropboxUploadErrorForLog(errJson, errText);
+    const baseLog = {
+      ...logContext,
       status: res.status,
+      statusText: res.statusText,
       attempt: attempt + 1,
       maxAttempts: maxRetries + 1,
       requestId,
       retryAfter,
-      pathPreview: safePath.slice(0, 140) + (safePath.length > 140 ? "…" : ""),
+      responseHeaders: dropboxResponseHeadersForLog(res),
+      pathPreview: safePath.slice(0, 200) + (safePath.length > 200 ? "…" : ""),
+      pathLength: safePath.length,
       pathChangedBySanitizer: safePath !== path.replace(/\/$/, ""),
-      error: errJson,
-    });
+      originalPathPreview: path.replace(/\/$/, "").slice(0, 200) + (path.replace(/\/$/, "").length > 200 ? "…" : ""),
+      mode,
+      contentLengthBytes,
+      dropboxErrorSummary: parsed.errorSummary,
+      dropboxErrorTag: parsed.errorTag,
+      errorBody: errJson,
+      rawResponseBodyPreview: parsed.rawBodyPreview,
+    };
+    console.error("[Dropbox upload] failed", baseLog);
 
     if (res.status === 401 && options.onUnauthorized && !didForceRefresh) {
       didForceRefresh = true;
+      console.error("[Dropbox upload] 401 — attempting access token refresh", {
+        ...logContext,
+        requestId,
+        attempt: attempt + 1,
+      });
       const refreshed = await options.onUnauthorized();
       if (refreshed) {
+        console.log("[Dropbox upload] token refresh OK — retrying upload", {
+          ...logContext,
+          attempt: attempt + 1,
+        });
         token = refreshed;
         continue;
       }
+      console.error("[Dropbox upload] token refresh failed or empty — giving up", {
+        ...logContext,
+        requestId,
+        attempt: attempt + 1,
+      });
       return null;
     }
 
-    if (!isRetryable || attempt === maxRetries) return null;
+    if (!isRetryable || attempt === maxRetries) {
+      console.error("[Dropbox upload] giving up (no more retries applicable)", {
+        ...baseLog,
+        finalReason: !isRetryable ? "non_retryable_status" : "max_retries",
+      });
+      return null;
+    }
     const retryAfterSeconds = retryAfter ? Number(retryAfter) : NaN;
     const waitMs = Number.isFinite(retryAfterSeconds)
       ? Math.max(0, retryAfterSeconds * 1000)
       : 500 * Math.pow(2, attempt);
+    console.error("[Dropbox upload] backing off before retry", {
+      ...logContext,
+      requestId,
+      nextAttempt: attempt + 2,
+      waitMs,
+      isRetryable,
+    });
     await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
+  console.error("[Dropbox upload] giving up (loop exit)", { ...logContext, contentLengthBytes, mode });
   return null;
 }
