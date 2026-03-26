@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { VIDEO_MODELS } from "@/lib/video-models";
 import { JOB_STATUS } from "@/lib/constants/job-status";
+import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 
 type JobRow = {
   id: string;
@@ -44,7 +45,8 @@ function formatDuration(createdAt: string, completedAt: string | null): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function statusLabel(status: string): string {
+function statusLabel(status: string, errorMessage: string | null | undefined): string {
+  if (status === JOB_STATUS.FAILED && errorMessage === JOB_ERROR.CANCELED) return "Canceled";
   const labels: Record<string, string> = {
     [JOB_STATUS.QUEUED]: "Queued",
     [JOB_STATUS.PROCESSING]: "Processing",
@@ -55,7 +57,9 @@ function statusLabel(status: string): string {
   return labels[status] ?? status;
 }
 
-function statusColor(status: string): string {
+function statusColor(status: string, errorMessage: string | null | undefined): string {
+  if (status === JOB_STATUS.FAILED && errorMessage === JOB_ERROR.CANCELED)
+    return "bg-zinc-100 text-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-300";
   if (status === JOB_STATUS.COMPLETED)
     return "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300";
   if (status === JOB_STATUS.FAILED)
@@ -235,6 +239,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
   const [detailsCache, setDetailsCache] = useState<Record<string, JobDetails>>({});
   const [detailsLoading, setDetailsLoading] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [selectedForDelete, setSelectedForDelete] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
 
@@ -335,6 +340,26 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
       alert("Retry failed");
     } finally {
       setRetryingId(null);
+    }
+  }
+
+  async function handleCancel(jobId: string) {
+    setCancellingId(jobId);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/cancel`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (res.ok) {
+        await fetchJobs();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error ?? "Cancel failed");
+      }
+    } catch {
+      alert("Cancel failed");
+    } finally {
+      setCancellingId(null);
     }
   }
 
@@ -565,12 +590,12 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                   </td>
                   <td className="px-4 py-3">
                     <span
-                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${statusColor(j.status)}`}
+                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${statusColor(j.status, j.errorMessage)}`}
                     >
                       {(j.status === JOB_STATUS.QUEUED || j.status === JOB_STATUS.PROCESSING || j.status === JOB_STATUS.SENT_TO_VEO) && (
                         <StatusSpinner />
                       )}
-                      {statusLabel(j.status)}
+                      {statusLabel(j.status, j.errorMessage)}
                     </span>
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-zinc-600 dark:text-zinc-400 tabular-nums">
@@ -586,16 +611,29 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    {j.status === JOB_STATUS.FAILED && (
+                    {(j.status === JOB_STATUS.QUEUED || j.status === JOB_STATUS.PROCESSING || j.status === JOB_STATUS.SENT_TO_VEO) && (
                       <button
                         type="button"
-                        onClick={() => handleRetry(j.id)}
-                        disabled={retryingId === j.id}
-                        className="rounded border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-                        title="Retry this job"
+                        onClick={() => handleCancel(j.id)}
+                        disabled={cancellingId === j.id}
+                        className="rounded border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800/30 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                        title="Cancel job"
                       >
-                        {retryingId === j.id ? "Retrying…" : "Retry"}
+                        {cancellingId === j.id ? "Canceling…" : "Cancel"}
                       </button>
+                    )}
+                    {j.status === JOB_STATUS.FAILED && (
+                      j.errorMessage !== JOB_ERROR.CANCELED && (
+                        <button
+                          type="button"
+                          onClick={() => handleRetry(j.id)}
+                          disabled={retryingId === j.id}
+                          className="rounded border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                          title="Retry this job"
+                        >
+                          {retryingId === j.id ? "Retrying…" : "Retry"}
+                        </button>
+                      )
                     )}
                   </td>
                 </tr>

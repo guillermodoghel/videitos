@@ -8,6 +8,7 @@ export const JOB_ERROR = {
   NO_RUNWAY_API_KEY: "No Runway API key. Add your key in Settings or ask an admin to add platform key.",
   DROPBOX_NOT_CONNECTED: "Dropbox not connected",
   DROPBOX_UPLOAD_FAILED: "Failed to upload to Dropbox",
+  CANCELED: "Canceled",
   UNSUPPORTED_MODEL: "Unsupported model (only Runway is supported)",
 } as const;
 

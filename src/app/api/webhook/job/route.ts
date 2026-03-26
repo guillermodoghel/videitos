@@ -43,6 +43,9 @@ export async function POST(request: NextRequest) {
   if (status === WEBHOOK_JOB_STATUS.ERROR) {
     const job = await findJob(jobId, operationName);
     if (job) {
+      if (job.errorMessage === JOB_ERROR.CANCELED) {
+        return NextResponse.json({ ok: true });
+      }
       await prisma.job.update({
         where: { id: job.id },
         data: {
@@ -68,6 +71,14 @@ export async function POST(request: NextRequest) {
       { error: "Job not found" },
       { status: 404 }
     );
+  }
+
+  if (
+    job.errorMessage === JOB_ERROR.CANCELED ||
+    job.status !== JOB_STATUS.PROCESSING ||
+    (operationName && job.providerOperationId !== operationName)
+  ) {
+    return NextResponse.json({ ok: true });
   }
 
   const [user, template] = await Promise.all([
@@ -236,14 +247,32 @@ async function findJob(
   if (jobId) {
     const byId = await prisma.job.findUnique({
       where: { id: jobId },
-      select: { id: true, userId: true, templateId: true, dropboxSourceFilePath: true, preGenImageKey: true },
+      select: {
+        id: true,
+        userId: true,
+        templateId: true,
+        status: true,
+        errorMessage: true,
+        providerOperationId: true,
+        dropboxSourceFilePath: true,
+        preGenImageKey: true,
+      },
     });
     if (byId) return byId;
   }
   if (operationName) {
     const byOp = await prisma.job.findFirst({
       where: { providerOperationId: operationName },
-      select: { id: true, userId: true, templateId: true, dropboxSourceFilePath: true, preGenImageKey: true },
+      select: {
+        id: true,
+        userId: true,
+        templateId: true,
+        status: true,
+        errorMessage: true,
+        providerOperationId: true,
+        dropboxSourceFilePath: true,
+        preGenImageKey: true,
+      },
     });
     return byOp ?? null;
   }
