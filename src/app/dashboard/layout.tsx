@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
+import { ImpersonationBanner } from "./ImpersonationBanner";
 import { NavUserMenu } from "./NavUserMenu";
 import { USER_ROLE } from "@/lib/constants/user-role";
 
@@ -14,6 +15,12 @@ export default async function DashboardLayout({
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
+      {user.impersonator && (
+        <ImpersonationBanner
+          email={user.email}
+          impersonatorEmail={user.impersonator.email}
+        />
+      )}
       <header className="sticky top-0 z-40 border-b border-zinc-200 bg-white/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:border-zinc-800 dark:bg-zinc-900/95 dark:supports-[backdrop-filter]:dark:bg-zinc-900/80">
         <div className="mx-auto flex h-14 max-w-4xl items-center justify-between gap-4 px-4">
           <nav className="flex items-center gap-1">

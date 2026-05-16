@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { getSessionUser } from "@/lib/auth";
 import { USER_ROLE } from "@/lib/constants/user-role";
 import { prisma } from "@/lib/prisma";
+import { ImpersonateUserButton } from "./ImpersonateUserButton";
 
 function formatDate(iso: Date): string {
   return iso.toLocaleString(undefined, {
@@ -10,6 +12,7 @@ function formatDate(iso: Date): string {
 }
 
 export default async function AdminUsersPage() {
+  const currentUser = await getSessionUser();
   const users = await prisma.user.findMany({
     orderBy: { createdAt: "desc" },
     select: { id: true, email: true, name: true, role: true, createdAt: true },
@@ -74,12 +77,18 @@ export default async function AdminUsersPage() {
                   {formatDate(u.createdAt)}
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <Link
-                    href={`/dashboard/admin/users/${u.id}/edit`}
-                    className="font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-                  >
-                    Edit
-                  </Link>
+                  <div className="flex items-center justify-end gap-3">
+                    {u.role !== USER_ROLE.ADMIN &&
+                      u.id !== currentUser?.id && (
+                        <ImpersonateUserButton userId={u.id} email={u.email} />
+                      )}
+                    <Link
+                      href={`/dashboard/admin/users/${u.id}/edit`}
+                      className="font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+                    >
+                      Edit
+                    </Link>
+                  </div>
                 </td>
               </tr>
             ))}
