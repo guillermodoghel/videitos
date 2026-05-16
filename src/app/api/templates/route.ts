@@ -22,12 +22,18 @@ async function parseBody(request: NextRequest): Promise<{
   if (contentType.includes("multipart/form-data")) {
     const formData = await request.formData();
     const configStr = formData.get("config");
+    const hasDropboxSource = formData.has("dropboxSourcePath");
+    const hasDropboxDestination = formData.has("dropboxDestinationPath");
     return {
       name: (formData.get("name") as string)?.trim(),
       model: (formData.get("model") as string)?.trim(),
       config: configStr ? JSON.parse(configStr as string) : undefined,
-      dropboxSourcePath: (formData.get("dropboxSourcePath") as string) || null,
-      dropboxDestinationPath: (formData.get("dropboxDestinationPath") as string) || null,
+      dropboxSourcePath: hasDropboxSource
+        ? ((formData.get("dropboxSourcePath") as string) || null)
+        : undefined,
+      dropboxDestinationPath: hasDropboxDestination
+        ? ((formData.get("dropboxDestinationPath") as string) || null)
+        : undefined,
       reference0: formData.get("reference0") as File | null,
       reference1: formData.get("reference1") as File | null,
       preGenRef0: formData.get("preGenRef0") as File | null,
@@ -39,8 +45,10 @@ async function parseBody(request: NextRequest): Promise<{
     name: body.name?.trim(),
     model: body.model?.trim(),
     config: body.config,
-    dropboxSourcePath: body.dropboxSourcePath ?? null,
-    dropboxDestinationPath: body.dropboxDestinationPath ?? null,
+    dropboxSourcePath:
+      body.dropboxSourcePath !== undefined ? body.dropboxSourcePath || null : undefined,
+    dropboxDestinationPath:
+      body.dropboxDestinationPath !== undefined ? body.dropboxDestinationPath || null : undefined,
     reference0: null,
     reference1: null,
     preGenRef0: null,
