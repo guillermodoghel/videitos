@@ -75,6 +75,7 @@ model Job {
   preGenImageKey        String?   // S3 key of pre-generation (text-to-image) output for display
   sourceThumbnailKey    String?   // S3 key of cached Dropbox source thumbnail (fetched once)
   errorMessage          String?
+  dropboxUploadErrorDetail String? // raw Dropbox API error when upload fails
   workflowPhase         String?   // transient phase for UI + workflow observability
   runwayProgress        Float?    // last Runway task progress 0–1 while generating
   runwayPollStatus      String?   // last Runway task status (PENDING, RUNNING, …)

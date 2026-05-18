@@ -74,9 +74,14 @@ const NON_DROPBOX_UPLOAD_RETRY_ERRORS = new Set<string>([
   "Failed to download source image from Dropbox",
 ]);
 
-export function isDropboxUploadRetryError(errorMessage: string | null): boolean {
+export function isDropboxUploadRetryError(
+  errorMessage: string | null,
+  dropboxUploadErrorDetail?: string | null
+): boolean {
+  if (dropboxUploadErrorDetail) return true;
   if (!errorMessage) return false;
   if (errorMessage === JOB_ERROR.DROPBOX_UPLOAD_FAILED) return true;
+  if (errorMessage === JOB_ERROR.DROPBOX_OUT_OF_SPACE) return true;
   if (NON_DROPBOX_UPLOAD_RETRY_ERRORS.has(errorMessage)) return false;
   const lower = errorMessage.toLowerCase();
   return lower.includes("dropbox");
@@ -86,12 +91,13 @@ export function isDropboxUploadRetryError(errorMessage: string | null): boolean 
 export function jobCanRetryDropboxUpload(job: {
   status: string;
   errorMessage: string | null;
+  dropboxUploadErrorDetail?: string | null;
   runwayOutputVideoUri: string | null;
   providerOperationId: string | null;
 }): boolean {
   return (
     job.status === JOB_STATUS.FAILED &&
-    isDropboxUploadRetryError(job.errorMessage) &&
+    isDropboxUploadRetryError(job.errorMessage, job.dropboxUploadErrorDetail) &&
     (!!job.runwayOutputVideoUri || !!job.providerOperationId)
   );
 }

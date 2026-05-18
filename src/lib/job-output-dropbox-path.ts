@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { ensureDropboxPath } from "@/lib/dropbox-path";
 
 /**
  * Dropbox output filename for a job. After a retake, archived outputs get a version suffix
@@ -14,6 +15,7 @@ export async function buildJobOutputDropboxFileName(
 }
 
 export function joinDropboxDestinationPath(destPath: string, fileName: string): string {
-  const normalized = destPath.replace(/\/$/, "");
-  return `${normalized}/${fileName}`;
+  const base = ensureDropboxPath(destPath).replace(/\/$/, "");
+  const name = fileName.replace(/^\//, "");
+  return `${base}/${name}`;
 }

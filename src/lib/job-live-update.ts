@@ -8,6 +8,7 @@ export type JobLiveUpdate = {
   runwayProgress: number | null;
   runwayPollStatus: string | null;
   errorMessage: string | null;
+  dropboxUploadErrorDetail: string | null;
   providerOperationId: string | null;
   outputDropboxPath: string | null;
   canRetryDropboxUpload: boolean;
@@ -23,6 +24,7 @@ const LIVE_KEYS: (keyof JobLiveUpdate)[] = [
   "runwayProgress",
   "runwayPollStatus",
   "errorMessage",
+  "dropboxUploadErrorDetail",
   "providerOperationId",
   "outputDropboxPath",
   "canRetryDropboxUpload",

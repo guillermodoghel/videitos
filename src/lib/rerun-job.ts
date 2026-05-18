@@ -17,6 +17,7 @@ const ALLOWED_STATUSES: Record<RerunMode, readonly string[]> = {
 const BASE_RESET = {
   status: JOB_STATUS.QUEUED,
   errorMessage: null,
+  dropboxUploadErrorDetail: null,
   workflowPhase: null,
   workflowRunId: null,
   runwayProgress: null,

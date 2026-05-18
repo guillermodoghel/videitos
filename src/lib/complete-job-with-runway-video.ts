@@ -9,10 +9,15 @@ import { downloadRunwayVideo } from "@/lib/runway";
 import { isRunwayImageToVideoModel, parseTemplateConfig } from "@/lib/video-models";
 import { computeJobCost } from "@/lib/credits";
 import { getRunwayApiKeyForUser, usesPlatformKey } from "@/lib/runway-api-key";
-import { getValidAccessToken, getValidAccessTokenWithOptions, uploadFile } from "@/lib/dropbox";
+import { getValidAccessToken, getValidAccessTokenWithOptions } from "@/lib/dropbox";
+import { uploadFileToDropbox } from "@/lib/dropbox-upload";
 import { maybeAutoRecharge } from "@/lib/stripe";
 import { JOB_STATUS } from "@/lib/constants/job-status";
-import { JOB_ERROR } from "@/lib/constants/job-error-messages";
+import {
+  formatDropboxUploadJobError,
+  JOB_ERROR,
+  truncateDropboxUploadErrorDetail,
+} from "@/lib/constants/job-error-messages";
 import { CREDIT_KIND } from "@/lib/constants/credit-transaction-kind";
 import { JOB_WORKFLOW_PHASE } from "@/lib/constants/job-workflow-phase";
 import { jobLog, jobLogError } from "@/lib/job-log";
@@ -47,6 +52,7 @@ type JobForReady = {
   templateId: string;
   status: string;
   errorMessage: string | null;
+  dropboxUploadErrorDetail: string | null;
   providerOperationId: string | null;
   outputDropboxPath: string | null;
   dropboxSourceFilePath: string;
@@ -71,7 +77,7 @@ export function getReadyCallbackDecision(
     return { proceed: false, reason: "already_completed" };
   }
   if (job.status === JOB_STATUS.FAILED) {
-    if (isDropboxUploadRetryError(job.errorMessage)) {
+    if (isDropboxUploadRetryError(job.errorMessage, job.dropboxUploadErrorDetail)) {
       return { proceed: true, reason: "dropbox_retry" };
     }
     return { proceed: false, reason: "already_failed" };
@@ -115,6 +121,7 @@ export async function completeJobWithRunwayVideo(params: {
       templateId: true,
       status: true,
       errorMessage: true,
+      dropboxUploadErrorDetail: true,
       providerOperationId: true,
       runwayOutputVideoUri: true,
       outputDropboxPath: true,
@@ -312,9 +319,9 @@ export async function completeJobWithRunwayVideo(params: {
     data: { workflowPhase: JOB_WORKFLOW_PHASE.UPLOADING },
   });
 
-  let uploadResult: { path_display?: string } | null;
+  let uploadResult: Awaited<ReturnType<typeof uploadFileToDropbox>>;
   try {
-    uploadResult = await uploadFile(token, outputPath, videoBuffer, {
+    uploadResult = await uploadFileToDropbox(token, outputPath, videoBuffer, {
       // overwrite: same job id → same output name; retries must not fail on path/conflict
       mode: "overwrite",
       onUnauthorized: () => getValidAccessTokenWithOptions(job.userId, { forceRefresh: true }),
@@ -353,18 +360,29 @@ export async function completeJobWithRunwayVideo(params: {
     throw err;
   }
 
-  if (!uploadResult) {
+  if (!uploadResult.ok) {
+    const errorMessage = formatDropboxUploadJobError(uploadResult.reason);
+    const dropboxUploadErrorDetail = truncateDropboxUploadErrorDetail(uploadResult.reason);
+    jobLogError("complete", "Dropbox upload failed", {
+      jobId: job.id,
+      source,
+      reason: uploadResult.reason,
+      status: uploadResult.status ?? null,
+      videoBufferBytes: videoBuffer.byteLength,
+      outputPath,
+    });
     await prisma.job.update({
       where: { id: job.id },
       data: {
         status: JOB_STATUS.FAILED,
-        errorMessage: JOB_ERROR.DROPBOX_UPLOAD_FAILED,
+        errorMessage,
+        dropboxUploadErrorDetail,
         runwayOutputVideoUri: videoUri ?? null,
         workflowPhase: null,
         completedAt: new Date(),
       },
     });
-    return { outcome: "failed", error: "Upload failed" };
+    return { outcome: "failed", error: errorMessage };
   }
 
   const config = template ? parseTemplateConfig(template.model, template.config as object) : null;
@@ -382,7 +400,7 @@ export async function completeJobWithRunwayVideo(params: {
   const apiCost = usePlatform ? computed.apiCost : 0;
   const creditCost = usePlatform ? computed.creditCost : 0;
 
-  const finalPath = uploadResult.path_display ?? outputPath;
+  const finalPath = uploadResult.path_display;
 
   const completed = await prisma.$transaction(async (tx) => {
     const active = await tx.job.findFirst({
@@ -429,6 +447,7 @@ export async function completeJobWithRunwayVideo(params: {
         apiCost: new Prisma.Decimal(apiCost),
         creditCost: new Prisma.Decimal(creditCost),
         errorMessage: null,
+        dropboxUploadErrorDetail: null,
       },
     });
     return "completed";

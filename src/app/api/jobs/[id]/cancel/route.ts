@@ -57,6 +57,7 @@ export async function POST(
     data: {
       status: JOB_STATUS.FAILED,
       errorMessage: JOB_ERROR.CANCELED,
+      dropboxUploadErrorDetail: null,
       completedAt: new Date(),
       providerOperationId: null,
       sentAt: null,

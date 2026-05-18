@@ -11,7 +11,10 @@ export default async function AdminDropboxUploadsPage() {
   const failures = await prisma.job.findMany({
     where: {
       status: JOB_STATUS.FAILED,
-      errorMessage: JOB_ERROR.DROPBOX_UPLOAD_FAILED,
+      OR: [
+        { errorMessage: JOB_ERROR.DROPBOX_UPLOAD_FAILED },
+        { dropboxUploadErrorDetail: { not: null } },
+      ],
     },
     orderBy: { updatedAt: "desc" },
     take: 200,
@@ -40,13 +43,14 @@ export default async function AdminDropboxUploadsPage() {
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">User</th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Template</th>
               <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Source</th>
+              <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Reason</th>
               <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-200 dark:divide-zinc-700">
             {failures.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
+                <td colSpan={6} className="px-4 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
                   No Dropbox upload failures.
                 </td>
               </tr>
@@ -57,6 +61,9 @@ export default async function AdminDropboxUploadsPage() {
                   <td className="px-4 py-3 text-zinc-900 dark:text-zinc-100">{job.user.email}</td>
                   <td className="px-4 py-3 text-zinc-700 dark:text-zinc-300">{job.template.name}</td>
                   <td className="max-w-md break-all px-4 py-3 font-mono text-xs text-zinc-600 dark:text-zinc-400">{job.dropboxSourceFilePath}</td>
+                  <td className="max-w-sm break-all px-4 py-3 font-mono text-xs text-red-600 dark:text-red-400">
+                    {job.dropboxUploadErrorDetail ?? job.errorMessage ?? "—"}
+                  </td>
                   <td className="px-4 py-3 text-right">
                     <RetryDropboxUploadButton jobId={job.id} />
                   </td>

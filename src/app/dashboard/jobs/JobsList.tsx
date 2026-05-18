@@ -25,6 +25,7 @@ type JobRow = {
   outputDropboxPath: string | null;
   preGenImageKey: string | null;
   errorMessage: string | null;
+  dropboxUploadErrorDetail: string | null;
   workflowPhase: string | null;
   runwayProgress: number | null;
   runwayPollStatus: string | null;
@@ -276,6 +277,14 @@ function JobDetailsPanel({
             <div>
               <dt className="text-zinc-500 dark:text-zinc-400">Error</dt>
               <dd className="break-all text-red-600 dark:text-red-400">{job.errorMessage}</dd>
+              {job.dropboxUploadErrorDetail && (
+                <>
+                  <dt className="mt-2 text-zinc-500 dark:text-zinc-400">Dropbox detail</dt>
+                  <dd className="break-all font-mono text-xs text-red-600/90 dark:text-red-400/90">
+                    {job.dropboxUploadErrorDetail}
+                  </dd>
+                </>
+              )}
             </div>
           )}
         </dl>

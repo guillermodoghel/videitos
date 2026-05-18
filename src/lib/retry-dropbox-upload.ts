@@ -1,6 +1,9 @@
 import { prisma } from "@/lib/prisma";
 import { JOB_STATUS } from "@/lib/constants/job-status";
-import { JOB_ERROR } from "@/lib/constants/job-error-messages";
+import {
+  JOB_ERROR,
+  truncateDropboxUploadErrorDetail,
+} from "@/lib/constants/job-error-messages";
 import { JOB_WORKFLOW_PHASE } from "@/lib/constants/job-workflow-phase";
 import { completeJobWithRunwayVideo } from "@/lib/complete-job-with-runway-video";
 import { jobCanRetryDropboxUpload } from "@/lib/resolve-runway-video-uri";
@@ -16,12 +19,19 @@ export type RetryDropboxUploadResult =
       retryAfterSeconds?: number;
     };
 
-async function markDropboxUploadFailed(jobId: string, workflowPhase: string | null): Promise<void> {
+async function markDropboxUploadFailed(
+  jobId: string,
+  workflowPhase: string | null,
+  dropboxUploadErrorDetail?: string | null
+): Promise<void> {
   await prisma.job.update({
     where: { id: jobId },
     data: {
       status: JOB_STATUS.FAILED,
       errorMessage: JOB_ERROR.DROPBOX_UPLOAD_FAILED,
+      dropboxUploadErrorDetail: dropboxUploadErrorDetail
+        ? truncateDropboxUploadErrorDetail(dropboxUploadErrorDetail)
+        : null,
       workflowPhase,
       completedAt: new Date(),
     },
@@ -85,6 +95,7 @@ export async function retryDropboxUploadForJob(
     data: {
       status: JOB_STATUS.PROCESSING,
       errorMessage: null,
+      dropboxUploadErrorDetail: null,
       completedAt: null,
       workflowPhase: JOB_WORKFLOW_PHASE.UPLOADING,
     },
@@ -113,7 +124,11 @@ export async function retryDropboxUploadForJob(
   }
 
   if (result.outcome === "dropbox_rate_limited") {
-    await markDropboxUploadFailed(jobId, JOB_WORKFLOW_PHASE.WAITING_DROPBOX_RATE_LIMIT);
+    await markDropboxUploadFailed(
+      jobId,
+      JOB_WORKFLOW_PHASE.WAITING_DROPBOX_RATE_LIMIT,
+      `rate_limited: retry after ${result.retryAfterSeconds}s`
+    );
     return {
       ok: false,
       error: `Dropbox rate limited. Try again in about ${result.retryAfterSeconds} seconds.`,
@@ -129,7 +144,13 @@ export async function retryDropboxUploadForJob(
         ? `Upload skipped: ${result.reason}`
         : "Upload retry failed";
 
-  await markDropboxUploadFailed(jobId, JOB_WORKFLOW_PHASE.UPLOADING);
+  const detail =
+    result.outcome === "failed"
+      ? result.error
+      : result.outcome === "skipped"
+        ? result.reason
+        : null;
+  await markDropboxUploadFailed(jobId, JOB_WORKFLOW_PHASE.UPLOADING, detail);
 
   jobLogError("retry-dropbox", "upload retry failed", {
     jobId,
