@@ -76,6 +76,8 @@ model Job {
   sourceThumbnailKey    String?   // S3 key of cached Dropbox source thumbnail (fetched once)
   errorMessage          String?
   workflowPhase         String?   // transient phase for UI + workflow observability
+  runwayProgress        Float?    // last Runway task progress 0–1 while generating
+  runwayPollStatus      String?   // last Runway task status (PENDING, RUNNING, …)
   workflowRunId         String?   // Vercel Workflow run id (for cancel)
   runwayOutputVideoUri  String?   // Runway output URL (ephemeral); kept for Dropbox upload retries
   apiCost               Decimal?  @db.Decimal(14, 4) // API cost (credits) when completed

@@ -414,6 +414,8 @@ export async function completeJobWithRunwayVideo(params: {
         outputDropboxPath: finalPath,
         runwayOutputVideoUri: null,
         workflowPhase: null,
+        runwayProgress: null,
+        runwayPollStatus: null,
         completedAt: new Date(),
         apiCost: new Prisma.Decimal(apiCost),
         creditCost: new Prisma.Decimal(creditCost),

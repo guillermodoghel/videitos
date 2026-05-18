@@ -21,6 +21,8 @@ type JobRow = {
   preGenImageKey: string | null;
   errorMessage: string | null;
   workflowPhase: string | null;
+  runwayProgress: number | null;
+  runwayPollStatus: string | null;
   canRetryDropboxUpload: boolean;
   apiCost: number | null;
   creditCost: number | null;
@@ -53,9 +55,10 @@ function formatDuration(createdAt: string, completedAt: string | null): string {
 function statusLabel(
   status: string,
   errorMessage: string | null | undefined,
-  workflowPhase: string | null | undefined
+  workflowPhase: string | null | undefined,
+  runwayProgress: number | null | undefined
 ): string {
-  const phaseLabel = getJobWorkflowPhaseLabel(status, workflowPhase);
+  const phaseLabel = getJobWorkflowPhaseLabel(status, workflowPhase, runwayProgress);
   if (phaseLabel) return phaseLabel;
   if (status === JOB_STATUS.FAILED && errorMessage === JOB_ERROR.CANCELED) return "Canceled";
   const labels: Record<string, string> = {
@@ -71,9 +74,10 @@ function statusLabel(
 function statusColor(
   status: string,
   errorMessage: string | null | undefined,
-  workflowPhase: string | null | undefined
+  workflowPhase: string | null | undefined,
+  runwayProgress: number | null | undefined
 ): string {
-  if (getJobWorkflowPhaseLabel(status, workflowPhase)) {
+  if (getJobWorkflowPhaseLabel(status, workflowPhase, runwayProgress)) {
     return "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300";
   }
   if (status === JOB_STATUS.FAILED && errorMessage === JOB_ERROR.CANCELED)
@@ -565,10 +569,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
     return (
       <div className="space-y-4">
         <div className="rounded-xl border border-zinc-200 bg-white p-8 text-center dark:border-zinc-800 dark:bg-zinc-900">
-          <p className="text-zinc-600 dark:text-zinc-400">
-            No jobs yet. Jobs are created when new images appear in a template’s
-            Dropbox source folder.
-          </p>
+          <p className="text-zinc-600 dark:text-zinc-400">No jobs yet.</p>
         </div>
       </div>
     );
@@ -758,12 +759,12 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                   </td>
                   <td className="px-4 py-3">
                     <span
-                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${statusColor(j.status, j.errorMessage, j.workflowPhase)}`}
+                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${statusColor(j.status, j.errorMessage, j.workflowPhase, j.runwayProgress)}`}
                     >
                       {(j.status === JOB_STATUS.QUEUED || j.status === JOB_STATUS.PROCESSING || j.status === JOB_STATUS.SENT_TO_VEO) && (
                         <StatusSpinner />
                       )}
-                      {statusLabel(j.status, j.errorMessage, j.workflowPhase)}
+                      {statusLabel(j.status, j.errorMessage, j.workflowPhase, j.runwayProgress)}
                     </span>
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-zinc-600 dark:text-zinc-400 tabular-nums">

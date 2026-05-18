@@ -173,11 +173,24 @@ async function pollRunwayTask_step(
   jobLog("workflow:poll", "step started", { jobId, operationName, attempt, url });
   const startedAt = Date.now();
 
-  const res = await fetch(url, {
+  let res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ jobId, operationName }),
   });
+  if (!res.ok) {
+    jobLog("workflow:poll", "job-status HTTP error — retrying once", {
+      jobId,
+      operationName,
+      attempt,
+      status: res.status,
+    });
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId, operationName }),
+    });
+  }
   const elapsedMs = Date.now() - startedAt;
 
   if (!res.ok) {

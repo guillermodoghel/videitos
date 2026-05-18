@@ -17,6 +17,8 @@ const BASE_RESET = {
   errorMessage: null,
   workflowPhase: null,
   workflowRunId: null,
+  runwayProgress: null,
+  runwayPollStatus: null,
   runwayOutputVideoUri: null,
   completedAt: null,
   providerOperationId: null,

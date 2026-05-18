@@ -5,12 +5,12 @@ import { JOB_STATUS } from "@/lib/constants/job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 import { USER_ROLE } from "@/lib/constants/user-role";
 import { cancelJobWorkflowRun } from "@/lib/cancel-job-workflow-run";
+import { cancelRunwayTaskForJob } from "@/lib/cancel-runway-task-for-job";
 import { isJobCanceled } from "@/lib/is-job-canceled";
 
 /**
  * POST /api/jobs/[id]/cancel
- * Marks the job canceled in the DB and stops the Vercel Workflow run when possible.
- * Webhook/complete paths ignore canceled jobs; in-flight Runway tasks are not revoked.
+ * Marks the job canceled, cancels the Runway task when running, and stops the workflow.
  */
 export async function POST(
   _request: NextRequest,
@@ -50,6 +50,8 @@ export async function POST(
 
   const workflowRunId = job.workflowRunId;
 
+  await cancelRunwayTaskForJob(jobId);
+
   await prisma.job.update({
     where: { id: jobId },
     data: {
@@ -61,6 +63,8 @@ export async function POST(
       rateLimitClaimedAt: null,
       outputDropboxPath: null,
       workflowPhase: null,
+      runwayProgress: null,
+      runwayPollStatus: null,
       apiCost: null,
       creditCost: null,
     },

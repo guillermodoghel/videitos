@@ -105,6 +105,8 @@ export async function GET(request: NextRequest) {
       preGenImageKey: j.preGenImageKey ?? null,
       errorMessage: j.errorMessage,
       workflowPhase: j.workflowPhase,
+      runwayProgress: j.runwayProgress,
+      runwayPollStatus: j.runwayPollStatus,
       canRetryDropboxUpload: jobCanRetryDropboxUpload({
         status: j.status,
         errorMessage: j.errorMessage,

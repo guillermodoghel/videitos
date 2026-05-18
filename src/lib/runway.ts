@@ -92,43 +92,15 @@ export async function startRunwayImageToVideo(
   return { taskId };
 }
 
-/**
- * Get Runway task status. Returns shape compatible with Veo status for Step Function.
- */
-export async function getRunwayTaskStatus(
-  apiKey: string,
-  taskId: string
-): Promise<RunwayTaskStatus> {
-  const res = await fetch(`${RUNWAY_API_BASE}/v1/tasks/${taskId}`, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "X-Runway-Version": RUNWAY_VERSION,
-    },
-  });
-
-  if (!res.ok) {
-    return {
-      done: true,
-      error: `Runway task fetch failed: ${res.status}`,
-    };
-  }
-
-  let data: {
-    status?: string;
-    output?: unknown;
-    artifacts?: unknown;
-    error?: string;
-    failure?: string;
-    failureCode?: string;
-    progress?: number;
-  };
-  try {
-    data = await res.json();
-  } catch {
-    return { done: true, error: "Invalid Runway task response" };
-  }
-
+function parseRunwayTaskResponse(data: {
+  status?: string;
+  output?: unknown;
+  artifacts?: unknown;
+  error?: string;
+  failure?: string;
+  failureCode?: string;
+  progress?: number;
+}): RunwayTaskStatus {
   const runwayStatus = (data.status ?? "UNKNOWN").toUpperCase();
   const progress = typeof data.progress === "number" ? data.progress : undefined;
 
@@ -153,6 +125,90 @@ export async function getRunwayTaskStatus(
   }
 
   return { done: false, runwayStatus, progress };
+}
+
+async function fetchRunwayTask(
+  apiKey: string,
+  taskId: string
+): Promise<Response> {
+  return fetch(`${RUNWAY_API_BASE}/v1/tasks/${taskId}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "X-Runway-Version": RUNWAY_VERSION,
+    },
+  });
+}
+
+/**
+ * Get Runway task status. Retries once on HTTP or network failure.
+ */
+export async function getRunwayTaskStatus(
+  apiKey: string,
+  taskId: string
+): Promise<RunwayTaskStatus> {
+  let lastHttpStatus: number | null = null;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetchRunwayTask(apiKey, taskId);
+      if (!res.ok) {
+        lastHttpStatus = res.status;
+        if (attempt === 0) continue;
+        return {
+          done: true,
+          error: `Runway task fetch failed: ${res.status}`,
+        };
+      }
+
+      let data: {
+        status?: string;
+        output?: unknown;
+        artifacts?: unknown;
+        error?: string;
+        failure?: string;
+        failureCode?: string;
+        progress?: number;
+      };
+      try {
+        data = await res.json();
+      } catch {
+        if (attempt === 0) continue;
+        return { done: true, error: "Invalid Runway task response" };
+      }
+
+      return parseRunwayTaskResponse(data);
+    } catch {
+      if (attempt === 0) continue;
+      return {
+        done: true,
+        error: `Runway task fetch failed${lastHttpStatus != null ? `: ${lastHttpStatus}` : ""}`,
+      };
+    }
+  }
+
+  return { done: true, error: "Runway task fetch failed" };
+}
+
+/**
+ * Cancel or delete a Runway task (DELETE /v1/tasks/{id}). 404 is treated as success.
+ */
+export async function cancelRunwayTask(
+  apiKey: string,
+  taskId: string
+): Promise<{ ok: boolean; status: number }> {
+  try {
+    const res = await fetch(`${RUNWAY_API_BASE}/v1/tasks/${taskId}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "X-Runway-Version": RUNWAY_VERSION,
+      },
+    });
+    return { ok: res.status === 204 || res.status === 404, status: res.status };
+  } catch {
+    return { ok: false, status: 0 };
+  }
 }
 
 /** Runway may return output as string URLs or objects with url/uri. */
