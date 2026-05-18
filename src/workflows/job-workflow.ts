@@ -434,7 +434,12 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
             videoUri,
           });
           if (webhookResult.jobCompleted) break;
-          if (webhookResult.retryable && webhookResult.retryAfterSeconds) {
+          if (
+            webhookResult.jobCompleted === false &&
+            "retryable" in webhookResult &&
+            webhookResult.retryable
+          ) {
+            const { retryAfterSeconds } = webhookResult;
             if (uploadAttempt >= DROPBOX_UPLOAD_WORKFLOW_RETRY.maxAttempts) {
               jobLogError("workflow", "Dropbox upload retries exhausted", {
                 jobId,
@@ -448,17 +453,13 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
               });
               return;
             }
-            await workflowWait_dropboxUpload_step(
-              jobId,
-              uploadAttempt,
-              webhookResult.retryAfterSeconds
-            );
+            await workflowWait_dropboxUpload_step(jobId, uploadAttempt, retryAfterSeconds);
             jobLog("workflow", "sleeping before Dropbox upload retry", {
               jobId,
               uploadAttempt,
-              sleepSeconds: webhookResult.retryAfterSeconds,
+              sleepSeconds: retryAfterSeconds,
             });
-            await sleep(`${webhookResult.retryAfterSeconds} seconds`);
+            await sleep(`${retryAfterSeconds} seconds`);
             continue;
           }
           throw new Error("webhook/job ready callback failed unexpectedly");
