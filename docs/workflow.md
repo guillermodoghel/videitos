@@ -8,7 +8,7 @@ Implementation: [src/workflows/job-workflow.ts](../src/workflows/job-workflow.ts
 
 1. **Job created** (Dropbox webhook, template sync, or dashboard) → status `queued`.
 2. **Workflow started** — `startJobWorkflow({ jobId, callbackBaseUrl })` calls `start(jobWorkflow, [jobId, baseUrl])` and stores `workflowRunId` on the job.
-3. **Phase: process** — workflow step runs `processJob(jobId)`:
+3. **Phase: process** — workflow step `fetch`es `POST /api/jobs/workflow/process` (runs `processJob` in a Vercel function for observability):
    - On success → `operationName` (Runway task id), phase `generating`.
    - On `rate_limit` → phase `waiting_rate_limit`, sleep **5s**, retry (see [job-retry.ts](../src/lib/constants/job-retry.ts)).
    - On `runway_insufficient_credits` → phase `waiting_runway_credits`, sleep **30s**, up to **20** attempts (~10 min), then fail job.
@@ -85,7 +85,7 @@ Tune `RUNWAY_MAX_CONCURRENT_TASKS` and per-model `rateLimit` in `video-models.ts
 | `DROPBOX_APP_KEY` / `DROPBOX_APP_SECRET` | Yes | Dropbox OAuth + webhooks |
 | `STRIPE_*` | If using credits | Stripe secret, webhook, publishable key |
 | `AWS_*` | If using S3 | Thumbnails, pre-gen, pending video cache |
-| `JOB_PROCESS_SECRET` | For start-execution | Legacy batch route + `claim-and-process` |
+| `JOB_PROCESS_SECRET` | For workflow process + start-execution | `POST /api/jobs/workflow/process`, legacy `claim-and-process`, `start-execution` |
 | `USER_CREATE_SECRET_TOKEN` | For admin user API | Not used by workflow |
 
 Full list with placeholders: [.env.example](../.env.example).

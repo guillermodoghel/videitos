@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { processJob } from "@/lib/process-job";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
+import { verifyJobProcessSecret } from "@/lib/verify-job-process-secret";
 
 /**
  * POST /api/jobs/claim-and-process
@@ -13,11 +14,7 @@ import { JOB_ERROR } from "@/lib/constants/job-error-messages";
  * Auth: x-internal-secret or Authorization must match JOB_PROCESS_SECRET.
  */
 export async function POST(request: NextRequest) {
-  const secret =
-    request.headers.get("x-internal-secret") ??
-    request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
-  const expected = process.env.JOB_PROCESS_SECRET;
-  if (!expected || secret !== expected) {
+  if (!verifyJobProcessSecret(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

@@ -6,11 +6,11 @@
 
 import { sleep } from "workflow";
 import {
-  processJob,
   markJobFailedRunwayInsufficientCredits,
   resetJobForRunwayCreditsRetry,
 } from "@/lib/process-job";
 import { jobLog, jobLogError } from "@/lib/job-log";
+import type { WorkflowProcessJobResponse } from "@/lib/workflow-process-job-response";
 import { isRunwayInsufficientCreditsError } from "@/lib/runway-errors";
 import { WEBHOOK_JOB_STATUS } from "@/lib/constants/webhook-job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
@@ -21,21 +21,12 @@ import { prisma } from "@/lib/prisma";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import {
   RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY,
-  RATE_LIMIT_WORKFLOW_RETRY_SECONDS,
   DROPBOX_UPLOAD_WORKFLOW_RETRY,
   RUNWAY_POLL_WORKFLOW,
   runwayPollSleepSeconds,
 } from "@/lib/constants/job-retry";
 
-export type ProcessStepResult =
-  | { ok: true; operationName: string }
-  | {
-      ok: false;
-      retryable: true;
-      retryReason: "rate_limit" | "runway_insufficient_credits";
-      retryAfterSeconds: number;
-    }
-  | { ok: false; retryable: false; error: string };
+export type ProcessStepResult = WorkflowProcessJobResponse;
 
 async function workflowPhase_step(
   jobId: string,
@@ -45,13 +36,59 @@ async function workflowPhase_step(
   await setJobWorkflowPhase(jobId, phase);
 }
 
-async function processJob_step(jobId: string, attempt: number): Promise<ProcessStepResult> {
+async function processJob_step(
+  baseUrl: string,
+  jobId: string,
+  attempt: number
+): Promise<ProcessStepResult> {
   "use step";
 
-  jobLog("workflow:process", "step started", { jobId, attempt });
+  const secret = process.env.JOB_PROCESS_SECRET;
+  if (!secret) {
+    throw new Error("JOB_PROCESS_SECRET is not configured");
+  }
+
+  const url = `${baseUrl.replace(/\/$/, "")}/api/jobs/workflow/process`;
+  jobLog("workflow:process", "step started", { jobId, attempt, url });
   const startedAt = Date.now();
-  const result = await processJob(jobId, { skipRateLimit: false });
+
+  let res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-internal-secret": secret,
+    },
+    body: JSON.stringify({ jobId }),
+  });
+  if (!res.ok) {
+    jobLog("workflow:process", "HTTP error — retrying once", {
+      jobId,
+      attempt,
+      status: res.status,
+    });
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-internal-secret": secret,
+      },
+      body: JSON.stringify({ jobId }),
+    });
+  }
+
   const elapsedMs = Date.now() - startedAt;
+
+  if (!res.ok) {
+    jobLogError("workflow:process", "HTTP error", {
+      jobId,
+      attempt,
+      status: res.status,
+      elapsedMs,
+    });
+    throw new Error(`workflow/process failed: ${res.status}`);
+  }
+
+  const result = (await res.json()) as ProcessStepResult;
 
   if (result.ok) {
     jobLog("workflow:process", "step succeeded", {
@@ -60,34 +97,17 @@ async function processJob_step(jobId: string, attempt: number): Promise<ProcessS
       operationName: result.operationName,
       elapsedMs,
     });
-    return { ok: true, operationName: result.operationName };
+    return result;
   }
-  if (result.error === "rate_limit") {
-    jobLog("workflow:process", "step rate limited (will retry)", {
+  if (result.retryable) {
+    jobLog("workflow:process", "step retryable", {
       jobId,
       attempt,
+      retryReason: result.retryReason,
+      retryAfterSeconds: result.retryAfterSeconds,
       elapsedMs,
     });
-    return {
-      ok: false,
-      retryable: true,
-      retryReason: "rate_limit",
-      retryAfterSeconds: RATE_LIMIT_WORKFLOW_RETRY_SECONDS,
-    };
-  }
-  if (result.error === JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS_CODE) {
-    jobLog("workflow:process", "Runway out of credits (will retry)", {
-      jobId,
-      attempt,
-      elapsedMs,
-      retryAfterSeconds: RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY.intervalSeconds,
-    });
-    return {
-      ok: false,
-      retryable: true,
-      retryReason: "runway_insufficient_credits",
-      retryAfterSeconds: RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY.intervalSeconds,
-    };
+    return result;
   }
   jobLogError("workflow:process", "step failed (fatal)", {
     jobId,
@@ -95,7 +115,7 @@ async function processJob_step(jobId: string, attempt: number): Promise<ProcessS
     error: result.error,
     elapsedMs,
   });
-  return { ok: false, retryable: false, error: result.error };
+  return result;
 }
 
 async function workflowWait_rateLimit_step(
@@ -361,7 +381,7 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
       if (await stopIfCanceled("process")) return;
 
       processAttempt += 1;
-      const stepResult = await processJob_step(jobId, processAttempt);
+      const stepResult = await processJob_step(callbackBaseUrl, jobId, processAttempt);
       if (stepResult.ok) {
         operationName = stepResult.operationName;
         await workflowPhase_step(jobId, JOB_WORKFLOW_PHASE.GENERATING);
