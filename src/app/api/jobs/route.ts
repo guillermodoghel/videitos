@@ -102,6 +102,7 @@ export async function GET(request: NextRequest) {
     preGenImageKey: j.preGenImageKey ?? null,
     errorMessage: j.errorMessage,
     workflowPhase: j.workflowPhase,
+    hasStoredRunwayVideo: !!j.runwayOutputVideoUri,
     apiCost: j.apiCost != null ? Number(j.apiCost) : null,
     creditCost: j.creditCost != null ? Number(j.creditCost) : null,
     createdAt: j.createdAt.toISOString(),

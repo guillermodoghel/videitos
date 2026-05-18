@@ -23,6 +23,7 @@ import {
   deletePendingJobVideo,
   pendingJobVideoKey,
 } from "@/lib/s3";
+import { persistRunwayVideoUri } from "@/lib/persist-runway-video-uri";
 
 export type CompleteJobWithRunwayVideoResult =
   | { outcome: "completed"; outputDropboxPath: string }
@@ -61,6 +62,9 @@ export function getReadyCallbackDecision(
     return { proceed: false, reason: "already_completed" };
   }
   if (job.status === JOB_STATUS.FAILED) {
+    if (job.errorMessage === JOB_ERROR.DROPBOX_UPLOAD_FAILED) {
+      return { proceed: true, reason: "dropbox_retry" };
+    }
     return { proceed: false, reason: "already_failed" };
   }
   if (!ACTIVE_STATUSES.includes(job.status as (typeof ACTIVE_STATUSES)[number])) {
@@ -112,6 +116,8 @@ export async function completeJobWithRunwayVideo(params: {
   if (!job) {
     return { outcome: "failed", error: "Job not found" };
   }
+
+  await persistRunwayVideoUri(jobId, videoUri);
 
   const decision = getReadyCallbackDecision(job, operationName);
   if (!decision.proceed) {
@@ -281,6 +287,10 @@ export async function completeJobWithRunwayVideo(params: {
     });
   } catch (err) {
     if (isDropboxRateLimitError(err)) {
+      await prisma.job.update({
+        where: { id: job.id },
+        data: { runwayOutputVideoUri: videoUri },
+      });
       jobLog("complete", "Dropbox rate limited — deferring retry", {
         jobId: job.id,
         retryAfterSeconds: err.retryAfterSeconds,
@@ -297,6 +307,7 @@ export async function completeJobWithRunwayVideo(params: {
       data: {
         status: JOB_STATUS.FAILED,
         errorMessage: JOB_ERROR.DROPBOX_UPLOAD_FAILED,
+        runwayOutputVideoUri: videoUri,
         workflowPhase: null,
         completedAt: new Date(),
       },
@@ -358,6 +369,7 @@ export async function completeJobWithRunwayVideo(params: {
       data: {
         status: JOB_STATUS.COMPLETED,
         outputDropboxPath: finalPath,
+        runwayOutputVideoUri: null,
         workflowPhase: null,
         completedAt: new Date(),
         apiCost: new Prisma.Decimal(apiCost),

@@ -8,7 +8,7 @@ export function RetryDropboxUploadButton({ jobId }: { jobId: string }) {
   async function onRetry() {
     setPending(true);
     try {
-      const res = await fetch(`/api/admin/jobs/${jobId}/retry-upload`, {
+      const res = await fetch(`/api/jobs/${jobId}/retry-dropbox-upload`, {
         method: "POST",
         credentials: "include",
       });

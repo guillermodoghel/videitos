@@ -4,6 +4,7 @@ import { jobLog, jobLogError } from "@/lib/job-log";
 import { getRunwayTaskStatus } from "@/lib/runway";
 import { isRunwayImageToVideoModel } from "@/lib/video-models";
 import { getRunwayApiKeyForUser } from "@/lib/runway-api-key";
+import { persistRunwayVideoUri } from "@/lib/persist-runway-video-uri";
 
 /**
  * POST /api/job-status
@@ -65,6 +66,9 @@ export async function POST(request: NextRequest) {
   try {
     const startedAt = Date.now();
     const status = await getRunwayTaskStatus(apiKey, operationName);
+    if (status.done && status.videoUri && jobId) {
+      await persistRunwayVideoUri(jobId, status.videoUri);
+    }
     jobLog("status", "Runway task status", {
       jobId,
       operationName,

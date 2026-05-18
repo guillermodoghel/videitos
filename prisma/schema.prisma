@@ -75,6 +75,7 @@ model Job {
   preGenImageKey        String?   // S3 key of pre-generation (text-to-image) output for display
   errorMessage          String?
   workflowPhase         String?   // transient phase for UI + workflow observability
+  runwayOutputVideoUri  String?   // Runway output URL (ephemeral); kept for Dropbox upload retries
   apiCost               Decimal?  @db.Decimal(14, 4) // API cost (credits) when completed
   creditCost            Decimal?  @db.Decimal(14, 4) // user credit charge when completed
   createdAt             DateTime  @default(now())

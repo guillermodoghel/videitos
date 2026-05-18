@@ -16,6 +16,7 @@ const BASE_RESET = {
   status: JOB_STATUS.QUEUED,
   errorMessage: null,
   workflowPhase: null,
+  runwayOutputVideoUri: null,
   completedAt: null,
   providerOperationId: null,
   sentAt: null,

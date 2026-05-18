@@ -20,6 +20,7 @@ type JobRow = {
   preGenImageKey: string | null;
   errorMessage: string | null;
   workflowPhase: string | null;
+  hasStoredRunwayVideo: boolean;
   apiCost: number | null;
   creditCost: number | null;
   createdAt: string;
@@ -65,6 +66,14 @@ function statusLabel(
     [JOB_STATUS.SENT_TO_VEO]: "Processing", // legacy
   };
   return labels[status] ?? status;
+}
+
+function canRetryDropboxUpload(job: JobRow): boolean {
+  return (
+    job.status === JOB_STATUS.FAILED &&
+    job.errorMessage === JOB_ERROR.DROPBOX_UPLOAD_FAILED &&
+    job.hasStoredRunwayVideo
+  );
 }
 
 function statusColor(
@@ -333,6 +342,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
   const [detailsCache, setDetailsCache] = useState<Record<string, JobDetails>>({});
   const [detailsLoading, setDetailsLoading] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [retryingDropboxId, setRetryingDropboxId] = useState<string | null>(null);
   const [retakingId, setRetakingId] = useState<string | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [selectedForDelete, setSelectedForDelete] = useState<Set<string>>(new Set());
@@ -465,6 +475,26 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
       alert("Retake failed");
     } finally {
       setRetakingId(null);
+    }
+  }
+
+  async function handleRetryDropboxUpload(jobId: string) {
+    setRetryingDropboxId(jobId);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/retry-dropbox-upload`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error ?? "Retry upload failed");
+        return;
+      }
+      await fetchJobs();
+    } catch {
+      alert("Retry upload failed");
+    } finally {
+      setRetryingDropboxId(null);
     }
   }
 
@@ -767,7 +797,18 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                         {retakingId === j.id ? "Retake…" : "Retake"}
                       </button>
                     )}
-                    {j.status === JOB_STATUS.FAILED && (
+                    {j.status === JOB_STATUS.FAILED && canRetryDropboxUpload(j) && (
+                      <button
+                        type="button"
+                        onClick={() => handleRetryDropboxUpload(j.id)}
+                        disabled={retryingDropboxId === j.id}
+                        className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200 dark:hover:bg-amber-900/50"
+                        title="Re-upload the generated video to Dropbox (no new Runway generation)"
+                      >
+                        {retryingDropboxId === j.id ? "Uploading…" : "Retry Dropbox upload"}
+                      </button>
+                    )}
+                    {j.status === JOB_STATUS.FAILED && !canRetryDropboxUpload(j) && (
                       <button
                         type="button"
                         onClick={() => handleRetry(j.id)}
