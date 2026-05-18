@@ -7,6 +7,7 @@ import { reconcileStuckProcessingJobs } from "@/lib/reconcile-stuck-jobs";
 import { reconcileStuckDropboxUploads } from "@/lib/reconcile-stuck-dropbox-uploads";
 import { releaseStaleRunwayClaims } from "@/lib/release-stale-runway-claims";
 import { jobCanRetryDropboxUpload } from "@/lib/resolve-runway-video-uri";
+import { buildJobThumbnailUrl } from "@/lib/job-thumbnail-token";
 
 const DEFAULT_PER_PAGE = 10;
 const MIN_PER_PAGE = 5;
@@ -91,30 +92,31 @@ export async function GET(request: NextRequest) {
   ]);
 
   const list = jobs.map((j) => ({
-    id: j.id,
-    status: j.status,
-    templateName: j.template.name,
-    userEmail: j.user.email,
-    userId: j.userId,
-    model: j.template.model,
-    dropboxSourceFilePath: j.dropboxSourceFilePath,
-    providerOperationId: j.providerOperationId,
-    outputDropboxPath: j.outputDropboxPath,
-    preGenImageKey: j.preGenImageKey ?? null,
-    errorMessage: j.errorMessage,
-    workflowPhase: j.workflowPhase,
-    canRetryDropboxUpload: jobCanRetryDropboxUpload({
+      id: j.id,
       status: j.status,
-      errorMessage: j.errorMessage,
-      runwayOutputVideoUri: j.runwayOutputVideoUri,
+      templateName: j.template.name,
+      userEmail: j.user.email,
+      userId: j.userId,
+      model: j.template.model,
+      dropboxSourceFilePath: j.dropboxSourceFilePath,
       providerOperationId: j.providerOperationId,
-    }),
-    apiCost: j.apiCost != null ? Number(j.apiCost) : null,
-    creditCost: j.creditCost != null ? Number(j.creditCost) : null,
-    createdAt: j.createdAt.toISOString(),
-    sentAt: j.sentAt?.toISOString() ?? null,
-    completedAt: j.completedAt?.toISOString() ?? null,
-  }));
+      thumbnailUrl: buildJobThumbnailUrl(j.id),
+      outputDropboxPath: j.outputDropboxPath,
+      preGenImageKey: j.preGenImageKey ?? null,
+      errorMessage: j.errorMessage,
+      workflowPhase: j.workflowPhase,
+      canRetryDropboxUpload: jobCanRetryDropboxUpload({
+        status: j.status,
+        errorMessage: j.errorMessage,
+        runwayOutputVideoUri: j.runwayOutputVideoUri,
+        providerOperationId: j.providerOperationId,
+      }),
+      apiCost: j.apiCost != null ? Number(j.apiCost) : null,
+      creditCost: j.creditCost != null ? Number(j.creditCost) : null,
+      createdAt: j.createdAt.toISOString(),
+      sentAt: j.sentAt?.toISOString() ?? null,
+      completedAt: j.completedAt?.toISOString() ?? null,
+    }));
 
   return NextResponse.json({
     jobs: list,

@@ -1,36 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { getValidAccessToken, getTemporaryLink } from "@/lib/dropbox";
-import { jobDropboxSourcePathOrId } from "@/lib/job-dropbox-source";
+import { ensureJobSourceThumbnail } from "@/lib/ensure-job-source-thumbnail";
+import { verifyJobThumbnailToken } from "@/lib/job-thumbnail-token";
 import { USER_ROLE } from "@/lib/constants/user-role";
 
-/** Browser cache duration for the thumbnail redirect (stable URL per job). */
+/** Browser + Vercel Image CDN cache (immutable blob per job). */
 const THUMBNAIL_CACHE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
 /**
- * GET /api/jobs/[id]/thumbnail
- * Redirects to a Dropbox temporary link for the job source image.
- * Cache-Control lets the browser cache the response (stable URL per job).
+ * GET /api/jobs/[id]/thumbnail?t=…
+ * Serves a cached source thumbnail (Dropbox downloaded once to S3).
+ * Auth: session cookie or signed token (for next/image / CDN fetch).
  */
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const sessionUser = await getSessionUser();
-  if (!sessionUser) {
-    return new NextResponse(null, { status: 401 });
-  }
-  const isAdmin = sessionUser.role === USER_ROLE.ADMIN;
-
   const { id } = await params;
-  const job = await prisma.job.findFirst({
-    where: {
-      id,
-      ...(isAdmin ? {} : { userId: sessionUser.id }),
-    },
+  const token = request.nextUrl.searchParams.get("t");
+
+  const job = await prisma.job.findUnique({
+    where: { id },
     select: {
+      id: true,
       userId: true,
+      sourceThumbnailKey: true,
       dropboxSourceFilePath: true,
       dropboxSourceFileId: true,
     },
@@ -40,20 +36,25 @@ export async function GET(
     return new NextResponse(null, { status: 404 });
   }
 
-  const token = await getValidAccessToken(job.userId);
-  if (!token) {
+  const sessionOk =
+    !!sessionUser &&
+    (sessionUser.role === USER_ROLE.ADMIN || job.userId === sessionUser.id);
+  const tokenOk = verifyJobThumbnailToken(id, token);
+
+  if (!sessionOk && !tokenOk) {
+    return new NextResponse(null, { status: 401 });
+  }
+
+  const cached = await ensureJobSourceThumbnail(job);
+  if (!cached) {
     return new NextResponse(null, { status: 404 });
   }
 
-  const link = await getTemporaryLink(token, jobDropboxSourcePathOrId(job));
-  if (!link?.link) {
-    return new NextResponse(null, { status: 404 });
-  }
-
-  return NextResponse.redirect(link.link, {
-    status: 302,
+  return new NextResponse(new Uint8Array(cached.buffer), {
+    status: 200,
     headers: {
-      "Cache-Control": `private, max-age=${THUMBNAIL_CACHE_MAX_AGE_SECONDS}`,
+      "Content-Type": cached.contentType,
+      "Cache-Control": `public, max-age=${THUMBNAIL_CACHE_MAX_AGE_SECONDS}, immutable`,
     },
   });
 }

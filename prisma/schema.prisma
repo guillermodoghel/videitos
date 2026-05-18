@@ -73,6 +73,7 @@ model Job {
   rateLimitClaimedAt    DateTime? // set when claiming a rate-limit slot (before calling provider)
   outputDropboxPath     String?
   preGenImageKey        String?   // S3 key of pre-generation (text-to-image) output for display
+  sourceThumbnailKey    String?   // S3 key of cached Dropbox source thumbnail (fetched once)
   errorMessage          String?
   workflowPhase         String?   // transient phase for UI + workflow observability
   workflowRunId         String?   // Vercel Workflow run id (for cancel)

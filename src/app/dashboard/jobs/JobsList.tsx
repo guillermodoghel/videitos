@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
+import Image from "next/image";
 import { VIDEO_MODELS } from "@/lib/video-models";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
@@ -14,6 +15,7 @@ type JobRow = {
   templateName: string;
   model: string;
   dropboxSourceFilePath: string;
+  thumbnailUrl: string;
   providerOperationId: string | null;
   outputDropboxPath: string | null;
   preGenImageKey: string | null;
@@ -32,10 +34,6 @@ type JobDetails = {
   preGenImageUrl: string | null;
   outputVideoUrl: string | null;
 };
-
-function jobThumbnailUrl(jobId: string): string {
-  return `/api/jobs/${jobId}/thumbnail`;
-}
 
 const POLL_INTERVAL_MS = 5000;
 const DEFAULT_PER_PAGE = 10;
@@ -123,14 +121,13 @@ function sourceFileLabel(path: string): string {
 }
 
 function JobSourceThumbnail({
-  jobId,
+  thumbnailUrl,
   sourcePath,
 }: {
-  jobId: string;
+  thumbnailUrl: string;
   sourcePath: string;
 }) {
   const label = sourceFileLabel(sourcePath);
-  const src = jobThumbnailUrl(jobId);
   const [failed, setFailed] = useState(false);
 
   if (failed) {
@@ -146,18 +143,19 @@ function JobSourceThumbnail({
 
   return (
     <a
-      href={src}
+      href={thumbnailUrl}
       target="_blank"
       rel="noopener noreferrer"
       title={label}
-      className="block shrink-0 overflow-hidden rounded border border-zinc-200 dark:border-zinc-600"
+      className="relative block h-10 w-10 shrink-0 overflow-hidden rounded border border-zinc-200 dark:border-zinc-600"
     >
-      <img
-        src={src}
+      <Image
+        src={thumbnailUrl}
         alt={label}
-        className="h-10 w-10 object-cover"
-        loading="lazy"
-        decoding="async"
+        width={40}
+        height={40}
+        className="object-cover"
+        sizes="40px"
         onError={() => setFailed(true)}
       />
     </a>
@@ -175,7 +173,7 @@ function JobDetailsPanel({
   onRetake?: () => void;
   retaking?: boolean;
 }) {
-  const sourceThumbnail = jobThumbnailUrl(job.id);
+  const sourceThumbnail = job.thumbnailUrl;
   const hasInputs =
     details &&
     (details.referenceImageUrls.length > 0 || job.dropboxSourceFilePath.length > 0);
@@ -253,14 +251,15 @@ function JobDetailsPanel({
                 href={sourceThumbnail}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="block overflow-hidden rounded-lg border border-zinc-200 shadow-sm dark:border-zinc-600"
+                className="relative block h-24 w-24 overflow-hidden rounded-lg border border-zinc-200 shadow-sm dark:border-zinc-600"
               >
-                <img
+                <Image
                   src={sourceThumbnail}
                   alt="Source (new image)"
-                  className="h-24 w-auto object-cover"
-                  loading="lazy"
-                  decoding="async"
+                  width={96}
+                  height={96}
+                  className="object-cover"
+                  sizes="96px"
                 />
               </a>
             )}
@@ -742,7 +741,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                   </td>
                   <td className="px-2 py-3">
                     <JobSourceThumbnail
-                      jobId={j.id}
+                      thumbnailUrl={j.thumbnailUrl}
                       sourcePath={j.dropboxSourceFilePath}
                     />
                   </td>

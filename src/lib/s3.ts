@@ -47,6 +47,53 @@ export function preGenOutputImageKey(userId: string, jobId: string, ext: "png" |
   return `${userId}/jobs/${jobId}/pregen.${ext}`;
 }
 
+/** Cached Dropbox source thumbnail for jobs list (immutable per job). */
+export function jobSourceThumbnailKey(
+  userId: string,
+  jobId: string,
+  ext: "png" | "jpg" | "webp" | "gif"
+): string {
+  return `${userId}/jobs/${jobId}/source-thumb.${ext}`;
+}
+
+export async function uploadJobSourceThumbnail(
+  userId: string,
+  jobId: string,
+  buffer: Buffer,
+  contentType: string
+): Promise<string | null> {
+  const client = getClient();
+  if (!client || !bucket) return null;
+
+  const ext =
+    contentType === "image/png"
+      ? "png"
+      : contentType === "image/webp"
+        ? "webp"
+        : contentType === "image/gif"
+          ? "gif"
+          : "jpg";
+  const key = jobSourceThumbnailKey(userId, jobId, ext);
+
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: buffer,
+      ContentType: contentType,
+      CacheControl: "public, max-age=31536000, immutable",
+    })
+  );
+  return key;
+}
+
+export function contentTypeForS3Key(key: string): string {
+  if (key.endsWith(".png")) return "image/png";
+  if (key.endsWith(".webp")) return "image/webp";
+  if (key.endsWith(".gif")) return "image/gif";
+  return "image/jpeg";
+}
+
 /** Temp Runway video while waiting on Dropbox rate limits (deleted after successful upload). */
 export function pendingJobVideoKey(userId: string, jobId: string): string {
   return `${userId}/jobs/${jobId}/pending-upload.mp4`;
