@@ -3,7 +3,7 @@ import {
   JOB_WORKFLOW_PHASE_LABEL,
   type JobWorkflowPhase,
 } from "@/lib/constants/job-workflow-phase";
-import { formatRunwayProgressPercent } from "@/lib/runway-progress-display";
+import { appendRunwayProgressToLabel } from "@/lib/runway-progress-display";
 
 const ACTIVE_STATUSES = new Set<string>([
   JOB_STATUS.QUEUED,
@@ -15,14 +15,13 @@ const ACTIVE_STATUSES = new Set<string>([
 export function getJobWorkflowPhaseLabel(
   status: string,
   workflowPhase: string | null | undefined,
-  runwayProgress?: number | null
+  runwayProgress?: number | null,
+  runwayPollStatus?: string | null
 ): string | null {
   if (!workflowPhase || !ACTIVE_STATUSES.has(status)) return null;
   if (workflowPhase in JOB_WORKFLOW_PHASE_LABEL) {
     const base = JOB_WORKFLOW_PHASE_LABEL[workflowPhase as JobWorkflowPhase];
-    const pct = formatRunwayProgressPercent(runwayProgress);
-    if (pct) return `${base} (${pct})`;
-    return base;
+    return appendRunwayProgressToLabel(base, runwayPollStatus, runwayProgress);
   }
   return null;
 }

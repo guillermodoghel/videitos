@@ -5,7 +5,7 @@ import {
   JOB_WORKFLOW_PHASE_LABEL,
   type JobWorkflowPhase,
 } from "@/lib/constants/job-workflow-phase";
-import { formatRunwayProgressPercent } from "@/lib/runway-progress-display";
+import { appendRunwayProgressToLabel } from "@/lib/runway-progress-display";
 
 export type WorkflowGraphStepState =
   | "pending"
@@ -68,11 +68,7 @@ function phaseDetail(
       phase === JOB_WORKFLOW_PHASE.GENERATING ||
       phase === JOB_WORKFLOW_PHASE.POLLING
     ) {
-      const pct = formatRunwayProgressPercent(runwayProgress);
-      const poll = runwayPollStatus?.trim();
-      if (pct && poll) return `${base} · ${poll} (${pct})`;
-      if (pct) return `${base} (${pct})`;
-      if (poll) return `${base} · ${poll}`;
+      return appendRunwayProgressToLabel(base, runwayPollStatus, runwayProgress);
     }
     return base;
   }

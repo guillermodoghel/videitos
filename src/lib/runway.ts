@@ -1,7 +1,12 @@
 /**
  * Runway image-to-video API (POST /v1/image_to_video).
  * Uses user's Runway API key. Task is polled via GET /v1/tasks/{id}.
- * @see https://docs.dev.runwayml.com/api/#tag/Start-generating/paths/~1v1~1image_to_video/post
+ *
+ * Task statuses: PENDING → THROTTLED (concurrency) → RUNNING → SUCCEEDED | FAILED | CANCELLED.
+ * `progress` (0–1) is only present while status is RUNNING.
+ *
+ * @see https://docs.dev.runwayml.com/api-details/sdks/
+ * @see https://docs.dev.runwayml.com/usage/tiers/ (THROTTLED)
  */
 
 const RUNWAY_API_BASE = "https://api.dev.runwayml.com";
@@ -103,14 +108,15 @@ function parseRunwayTaskResponse(data: {
   progress?: number;
 }): RunwayTaskStatus {
   const runwayStatus = (data.status ?? "UNKNOWN").toUpperCase();
+  // progress is only present on RUNNING tasks (Runway API / official SDK).
   const rawProgress =
-    typeof data.progress === "number"
+    runwayStatus === "RUNNING" && typeof data.progress === "number"
       ? data.progress
-      : typeof (data as { progressRatio?: number }).progressRatio === "number"
-        ? (data as { progressRatio: number }).progressRatio
-        : undefined;
+      : undefined;
   const progress =
-    rawProgress !== undefined ? normalizeRunwayProgress(rawProgress) ?? undefined : undefined;
+    rawProgress !== undefined
+      ? normalizeRunwayProgress(rawProgress, runwayStatus) ?? undefined
+      : undefined;
 
   if (runwayStatus === "SUCCEEDED") {
     const url =

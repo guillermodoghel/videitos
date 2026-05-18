@@ -15,9 +15,22 @@ export const DROPBOX_UPLOAD_WORKFLOW_RETRY = {
   maxSleepSeconds: 90,
 } as const;
 
-/** Poll Runway task status until done or timeout (5s between polls). */
+/**
+ * Poll Runway task status until done or timeout.
+ * Runway recommends ≥5s between polls; official SDK uses ~6s + jitter.
+ * @see https://docs.dev.runwayml.com/api-details/sdks/
+ */
 export const RUNWAY_POLL_WORKFLOW = {
   intervalSeconds: 5,
-  /** 720 × 5s = 60 minutes max wait for generation. */
+  /** Random jitter (seconds) added to each poll sleep, matching SDK behavior. */
+  jitterSeconds: 1.5,
+  /** 720 × ~5.75s ≈ 60 minutes max wait for generation. */
   maxAttempts: 720,
 } as const;
+
+/** Poll interval with jitter (min 5s per Runway API guidance). */
+export function runwayPollSleepSeconds(): number {
+  const { intervalSeconds, jitterSeconds } = RUNWAY_POLL_WORKFLOW;
+  const jitter = (Math.random() * 2 - 1) * jitterSeconds;
+  return Math.max(5, Math.round((intervalSeconds + jitter) * 10) / 10);
+}

@@ -24,6 +24,7 @@ import {
   RATE_LIMIT_WORKFLOW_RETRY_SECONDS,
   DROPBOX_UPLOAD_WORKFLOW_RETRY,
   RUNWAY_POLL_WORKFLOW,
+  runwayPollSleepSeconds,
 } from "@/lib/constants/job-retry";
 
 export type ProcessStepResult =
@@ -582,15 +583,16 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
       }
 
       await workflowWait_poll_step(jobId, operationName, pollAttempt);
+      const sleepSeconds = runwayPollSleepSeconds();
       jobLog("workflow", "sleeping before next poll", {
         jobId,
         operationName,
         pollAttempt,
         runwayStatus: status.runwayStatus ?? null,
         progress: status.progress ?? null,
-        sleepSeconds: RUNWAY_POLL_WORKFLOW.intervalSeconds,
+        sleepSeconds,
       });
-      await sleep(`${RUNWAY_POLL_WORKFLOW.intervalSeconds} seconds`);
+      await sleep(`${sleepSeconds} seconds`);
       if (await stopIfCanceled("poll_sleep")) return;
     }
   }

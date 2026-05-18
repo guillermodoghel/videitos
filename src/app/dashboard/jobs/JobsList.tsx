@@ -6,7 +6,7 @@ import { VIDEO_MODELS } from "@/lib/video-models";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 import { getJobWorkflowPhaseLabel } from "@/lib/job-workflow-phase-label";
-import { formatRunwayProgressPercent } from "@/lib/runway-progress-display";
+import { appendRunwayProgressToLabel } from "@/lib/runway-progress-display";
 import { isActiveJobStatus } from "@/lib/job-live-update";
 import { JobWorkflowProgressGraph } from "./JobWorkflowProgressGraph";
 import { mergeJobLiveUpdates, type JobLiveUpdate } from "@/lib/job-live-update";
@@ -71,9 +71,15 @@ function statusLabel(
   status: string,
   errorMessage: string | null | undefined,
   workflowPhase: string | null | undefined,
-  runwayProgress: number | null | undefined
+  runwayProgress: number | null | undefined,
+  runwayPollStatus: string | null | undefined
 ): string {
-  const phaseLabel = getJobWorkflowPhaseLabel(status, workflowPhase, runwayProgress);
+  const phaseLabel = getJobWorkflowPhaseLabel(
+    status,
+    workflowPhase,
+    runwayProgress,
+    runwayPollStatus
+  );
   if (phaseLabel) return phaseLabel;
   if (status === JOB_STATUS.FAILED && errorMessage === JOB_ERROR.CANCELED) return "Canceled";
   const labels: Record<string, string> = {
@@ -85,8 +91,7 @@ function statusLabel(
   };
   const base = labels[status] ?? status;
   if (isActiveJobStatus(status)) {
-    const pct = formatRunwayProgressPercent(runwayProgress);
-    if (pct) return `${base} (${pct})`;
+    return appendRunwayProgressToLabel(base, runwayPollStatus, runwayProgress);
   }
   return base;
 }
@@ -95,9 +100,10 @@ function statusColor(
   status: string,
   errorMessage: string | null | undefined,
   workflowPhase: string | null | undefined,
-  runwayProgress: number | null | undefined
+  runwayProgress: number | null | undefined,
+  runwayPollStatus: string | null | undefined
 ): string {
-  if (getJobWorkflowPhaseLabel(status, workflowPhase, runwayProgress)) {
+  if (getJobWorkflowPhaseLabel(status, workflowPhase, runwayProgress, runwayPollStatus)) {
     return "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300";
   }
   if (status === JOB_STATUS.FAILED && errorMessage === JOB_ERROR.CANCELED)
@@ -909,12 +915,12 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                   </td>
                   <td className="px-4 py-3">
                     <span
-                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors duration-300 ${statusColor(j.status, j.errorMessage, j.workflowPhase, j.runwayProgress)}`}
+                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors duration-300 ${statusColor(j.status, j.errorMessage, j.workflowPhase, j.runwayProgress, j.runwayPollStatus)}`}
                     >
                       {(j.status === JOB_STATUS.QUEUED || j.status === JOB_STATUS.PROCESSING || j.status === JOB_STATUS.SENT_TO_VEO) && (
                         <StatusSpinner />
                       )}
-                      {statusLabel(j.status, j.errorMessage, j.workflowPhase, j.runwayProgress)}
+                      {statusLabel(j.status, j.errorMessage, j.workflowPhase, j.runwayProgress, j.runwayPollStatus)}
                     </span>
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-zinc-600 dark:text-zinc-400 tabular-nums">
