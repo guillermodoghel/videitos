@@ -111,20 +111,24 @@ export async function retryDropboxUploadForJob(
     };
   }
 
+  const failureMessage =
+    result.outcome === "failed"
+      ? result.error
+      : result.outcome === "skipped"
+        ? `Upload skipped: ${result.reason}`
+        : result.outcome === "already_completed"
+          ? "Job already completed"
+          : "Upload retry failed";
+
   jobLogError("retry-dropbox", "upload retry failed", {
     jobId,
     outcome: result.outcome,
-    error: "error" in result ? result.error : result.reason,
+    error: failureMessage,
   });
 
   return {
     ok: false,
-    error:
-      result.outcome === "failed"
-        ? result.error
-        : result.outcome === "skipped"
-          ? `Upload skipped: ${result.reason}`
-          : "Upload retry failed",
+    error: failureMessage,
     status: 500,
   };
 }
