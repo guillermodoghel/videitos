@@ -52,18 +52,10 @@ export async function GET(
     if (url) preGenImageUrl = url;
   }
 
-  let sourceImageUrl: string | null = null;
   let outputVideoUrl: string | null = null;
-  const token = await getValidAccessToken(job.userId);
-  if (token) {
-    const sourcePathOrId = job.dropboxSourceFileId
-      ? job.dropboxSourceFileId.startsWith("id:")
-        ? job.dropboxSourceFileId
-        : `id:${job.dropboxSourceFileId}`
-      : job.dropboxSourceFilePath;
-    const sourceLink = await getTemporaryLink(token, sourcePathOrId);
-    if (sourceLink) sourceImageUrl = sourceLink.link;
-    if (job.outputDropboxPath) {
+  if (job.outputDropboxPath) {
+    const token = await getValidAccessToken(job.userId);
+    if (token) {
       const videoLink = await getTemporaryLink(token, job.outputDropboxPath);
       if (videoLink) outputVideoUrl = videoLink.link;
     }
@@ -71,7 +63,6 @@ export async function GET(
 
   return NextResponse.json({
     referenceImageUrls,
-    sourceImageUrl,
     preGenImageUrl,
     outputVideoUrl,
   });

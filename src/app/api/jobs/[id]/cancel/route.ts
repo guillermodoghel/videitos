@@ -4,11 +4,13 @@ import { prisma } from "@/lib/prisma";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 import { USER_ROLE } from "@/lib/constants/user-role";
+import { cancelJobWorkflowRun } from "@/lib/cancel-job-workflow-run";
+import { isJobCanceled } from "@/lib/is-job-canceled";
 
 /**
  * POST /api/jobs/[id]/cancel
- * Cancels a queued/processing job (marks it failed with errorMessage="Canceled").
- * Note: we can't reliably stop an in-flight provider call; webhook is hardened to avoid overriding canceled jobs.
+ * Marks the job canceled in the DB and stops the Vercel Workflow run when possible.
+ * Webhook/complete paths ignore canceled jobs; in-flight Runway tasks are not revoked.
  */
 export async function POST(
   _request: NextRequest,
@@ -23,7 +25,7 @@ export async function POST(
   const { id: jobId } = await params;
   const job = await prisma.job.findUnique({
     where: { id: jobId },
-    select: { id: true, userId: true, status: true, errorMessage: true },
+    select: { id: true, userId: true, status: true, errorMessage: true, workflowRunId: true },
   });
 
   if (!job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
@@ -34,7 +36,7 @@ export async function POST(
   if (job.status === JOB_STATUS.COMPLETED) {
     return NextResponse.json({ error: "Cannot cancel a completed job" }, { status: 400 });
   }
-  if (job.errorMessage === JOB_ERROR.CANCELED) {
+  if (isJobCanceled(job.errorMessage)) {
     return NextResponse.json({ ok: true, jobId: job.id });
   }
   const isCancellable =
@@ -45,6 +47,8 @@ export async function POST(
   if (!isCancellable) {
     return NextResponse.json({ error: `Cannot cancel job in status: ${job.status}` }, { status: 400 });
   }
+
+  const workflowRunId = job.workflowRunId;
 
   await prisma.job.update({
     where: { id: jobId },
@@ -61,6 +65,8 @@ export async function POST(
       creditCost: null,
     },
   });
+
+  await cancelJobWorkflowRun(workflowRunId);
 
   return NextResponse.json({ ok: true, jobId: jobId });
 }

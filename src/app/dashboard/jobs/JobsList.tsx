@@ -15,7 +15,6 @@ type JobRow = {
   model: string;
   dropboxSourceFilePath: string;
   providerOperationId: string | null;
-  sourceThumbnailUrl: string | null;
   outputDropboxPath: string | null;
   preGenImageKey: string | null;
   errorMessage: string | null;
@@ -30,10 +29,13 @@ type JobRow = {
 
 type JobDetails = {
   referenceImageUrls: string[];
-  sourceImageUrl: string | null;
   preGenImageUrl: string | null;
   outputVideoUrl: string | null;
 };
+
+function jobThumbnailUrl(jobId: string): string {
+  return `/api/jobs/${jobId}/thumbnail`;
+}
 
 const POLL_INTERVAL_MS = 5000;
 const DEFAULT_PER_PAGE = 10;
@@ -121,14 +123,17 @@ function sourceFileLabel(path: string): string {
 }
 
 function JobSourceThumbnail({
-  url,
+  jobId,
   sourcePath,
 }: {
-  url: string | null;
+  jobId: string;
   sourcePath: string;
 }) {
   const label = sourceFileLabel(sourcePath);
-  if (!url) {
+  const src = jobThumbnailUrl(jobId);
+  const [failed, setFailed] = useState(false);
+
+  if (failed) {
     return (
       <span
         className="flex h-10 w-10 shrink-0 items-center justify-center rounded border border-zinc-200 bg-zinc-100 text-[10px] text-zinc-400 dark:border-zinc-600 dark:bg-zinc-800"
@@ -138,19 +143,22 @@ function JobSourceThumbnail({
       </span>
     );
   }
+
   return (
     <a
-      href={url}
+      href={src}
       target="_blank"
       rel="noopener noreferrer"
       title={label}
       className="block shrink-0 overflow-hidden rounded border border-zinc-200 dark:border-zinc-600"
     >
       <img
-        src={url}
+        src={src}
         alt={label}
         className="h-10 w-10 object-cover"
         loading="lazy"
+        decoding="async"
+        onError={() => setFailed(true)}
       />
     </a>
   );
@@ -167,7 +175,10 @@ function JobDetailsPanel({
   onRetake?: () => void;
   retaking?: boolean;
 }) {
-  const hasInputs = details && (details.referenceImageUrls.length > 0 || details.sourceImageUrl);
+  const sourceThumbnail = jobThumbnailUrl(job.id);
+  const hasInputs =
+    details &&
+    (details.referenceImageUrls.length > 0 || job.dropboxSourceFilePath.length > 0);
   const hasPreGen = details?.preGenImageUrl;
   const hasOutput = job.status === JOB_STATUS.COMPLETED && details?.outputVideoUrl;
 
@@ -237,17 +248,19 @@ function JobDetailsPanel({
                 />
               </a>
             ))}
-            {details.sourceImageUrl && (
+            {job.dropboxSourceFilePath && (
               <a
-                href={details.sourceImageUrl}
+                href={sourceThumbnail}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="block overflow-hidden rounded-lg border border-zinc-200 shadow-sm dark:border-zinc-600"
               >
                 <img
-                  src={details.sourceImageUrl}
+                  src={sourceThumbnail}
                   alt="Source (new image)"
                   className="h-24 w-auto object-cover"
+                  loading="lazy"
+                  decoding="async"
                 />
               </a>
             )}
@@ -729,7 +742,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                   </td>
                   <td className="px-2 py-3">
                     <JobSourceThumbnail
-                      url={j.sourceThumbnailUrl}
+                      jobId={j.id}
                       sourcePath={j.dropboxSourceFilePath}
                     />
                   </td>

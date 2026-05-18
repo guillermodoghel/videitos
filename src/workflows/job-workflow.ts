@@ -14,6 +14,7 @@ import { jobLog, jobLogError } from "@/lib/job-log";
 import { isRunwayInsufficientCreditsError } from "@/lib/runway-errors";
 import { WEBHOOK_JOB_STATUS } from "@/lib/constants/webhook-job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
+import { isJobCanceled } from "@/lib/is-job-canceled";
 import { JOB_WORKFLOW_PHASE } from "@/lib/constants/job-workflow-phase";
 import { setJobWorkflowPhase } from "@/lib/set-job-workflow-phase";
 import { prisma } from "@/lib/prisma";
@@ -143,6 +144,15 @@ async function isJobCompleted_step(jobId: string): Promise<boolean> {
     select: { status: true },
   });
   return job?.status === JOB_STATUS.COMPLETED;
+}
+
+async function isJobCanceled_step(jobId: string): Promise<boolean> {
+  "use step";
+  const job = await prisma.job.findUnique({
+    where: { id: jobId },
+    select: { errorMessage: true },
+  });
+  return isJobCanceled(job?.errorMessage);
 }
 
 async function pollRunwayTask_step(
@@ -315,14 +325,27 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
   const workflowStartedAt = Date.now();
   jobLog("workflow", "run started", { jobId, callbackBaseUrl });
 
+  async function stopIfCanceled(phase: string): Promise<boolean> {
+    if (await isJobCanceled_step(jobId)) {
+      jobLog("workflow", "run stopped — job canceled", { jobId, phase });
+      return true;
+    }
+    return false;
+  }
+
   await workflowPhase_step(jobId, JOB_WORKFLOW_PHASE.STARTING);
+  if (await stopIfCanceled("starting")) return;
 
   let operationName: string;
   let processAttempt = 0;
   let runwayCreditsWaitAttempts = 0;
 
   main: while (true) {
+    if (await stopIfCanceled("main")) return;
+
     for (;;) {
+      if (await stopIfCanceled("process")) return;
+
       processAttempt += 1;
       const stepResult = await processJob_step(jobId, processAttempt);
       if (stepResult.ok) {
@@ -368,7 +391,11 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
           runwayCreditsWaitAttempts,
         });
         await sleep(`${stepResult.retryAfterSeconds} seconds`);
+        if (await stopIfCanceled("process_retry_sleep")) return;
         continue;
+      }
+      if (stepResult.error === JOB_ERROR.CANCELED || (await stopIfCanceled("process_fatal"))) {
+        return;
       }
       jobLogError("workflow", "run failed at process phase", {
         jobId,
@@ -386,6 +413,8 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
 
     let pollAttempt = 0;
     for (;;) {
+      if (await stopIfCanceled("poll")) return;
+
       pollAttempt += 1;
 
       if (pollAttempt > RUNWAY_POLL_WORKFLOW.maxAttempts) {
@@ -426,6 +455,8 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
         const videoUri = status.videoUri;
         let uploadAttempt = 0;
         for (;;) {
+          if (await stopIfCanceled("dropbox_upload")) return;
+
           uploadAttempt += 1;
           const webhookResult = await webhookJob_step(callbackBaseUrl, {
             status: WEBHOOK_JOB_STATUS.READY,
@@ -463,6 +494,7 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
               sleepSeconds: retryAfterSeconds,
             });
             await sleep(`${retryAfterSeconds} seconds`);
+            if (await stopIfCanceled("dropbox_upload_retry_sleep")) return;
             continue;
           }
           throw new Error("webhook/job ready callback failed unexpectedly");
@@ -513,6 +545,7 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
             RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY.intervalSeconds
           );
           await sleep(`${RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY.intervalSeconds} seconds`);
+          if (await stopIfCanceled("runway_credits_poll_sleep")) return;
           continue main;
         }
         jobLogError("workflow", "poll phase failed", {
@@ -545,6 +578,7 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
         sleepSeconds: RUNWAY_POLL_WORKFLOW.intervalSeconds,
       });
       await sleep(`${RUNWAY_POLL_WORKFLOW.intervalSeconds} seconds`);
+      if (await stopIfCanceled("poll_sleep")) return;
     }
   }
 }

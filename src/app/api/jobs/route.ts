@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser, getSessionUserId } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { getValidAccessToken, getTemporaryLink } from "@/lib/dropbox";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { USER_ROLE } from "@/lib/constants/user-role";
 import { reconcileStuckProcessingJobs } from "@/lib/reconcile-stuck-jobs";
@@ -91,8 +90,6 @@ export async function GET(request: NextRequest) {
     }),
   ]);
 
-  const thumbnailByJobId = await resolveSourceThumbnails(jobs);
-
   const list = jobs.map((j) => ({
     id: j.id,
     status: j.status,
@@ -102,7 +99,6 @@ export async function GET(request: NextRequest) {
     model: j.template.model,
     dropboxSourceFilePath: j.dropboxSourceFilePath,
     providerOperationId: j.providerOperationId,
-    sourceThumbnailUrl: thumbnailByJobId.get(j.id) ?? null,
     outputDropboxPath: j.outputDropboxPath,
     preGenImageKey: j.preGenImageKey ?? null,
     errorMessage: j.errorMessage,
@@ -164,49 +160,4 @@ export async function DELETE(request: NextRequest) {
   });
 
   return NextResponse.json({ deleted: result.count });
-}
-
-type JobForThumbnail = {
-  id: string;
-  userId: string;
-  dropboxSourceFilePath: string;
-  dropboxSourceFileId: string | null;
-};
-
-function dropboxSourcePathOrId(job: JobForThumbnail): string {
-  if (job.dropboxSourceFileId) {
-    return job.dropboxSourceFileId.startsWith("id:")
-      ? job.dropboxSourceFileId
-      : `id:${job.dropboxSourceFileId}`;
-  }
-  return job.dropboxSourceFilePath;
-}
-
-async function resolveSourceThumbnails(
-  jobs: JobForThumbnail[]
-): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
-  if (jobs.length === 0) return out;
-
-  const byUser = new Map<string, JobForThumbnail[]>();
-  for (const job of jobs) {
-    const list = byUser.get(job.userId) ?? [];
-    list.push(job);
-    byUser.set(job.userId, list);
-  }
-
-  await Promise.all(
-    [...byUser.entries()].map(async ([userId, userJobs]) => {
-      const token = await getValidAccessToken(userId);
-      if (!token) return;
-      await Promise.all(
-        userJobs.map(async (job) => {
-          const link = await getTemporaryLink(token, dropboxSourcePathOrId(job));
-          if (link?.link) out.set(job.id, link.link);
-        })
-      );
-    })
-  );
-
-  return out;
 }

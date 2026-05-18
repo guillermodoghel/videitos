@@ -85,6 +85,11 @@ export async function processJob(
     return { ok: false, error: "Job not found" };
   }
 
+  if (job.errorMessage === JOB_ERROR.CANCELED) {
+    jobLog("process", "skipped — job canceled", { jobId });
+    return { ok: false, error: JOB_ERROR.CANCELED };
+  }
+
   jobLog("process", "job loaded", {
     jobId,
     status: job.status,

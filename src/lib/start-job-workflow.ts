@@ -6,6 +6,7 @@
 import { start } from "workflow/api";
 import { jobWorkflow } from "@/workflows/job-workflow";
 import { jobLog, jobLogError } from "@/lib/job-log";
+import { prisma } from "@/lib/prisma";
 
 export async function startJobWorkflow(params: {
   jobId: string;
@@ -15,8 +16,12 @@ export async function startJobWorkflow(params: {
   const base = callbackBaseUrl.replace(/\/$/, "");
   jobLog("start", "starting workflow", { jobId, callbackBaseUrl: base });
   try {
-    await start(jobWorkflow, [jobId, base]);
-    jobLog("start", "workflow started", { jobId });
+    const run = await start(jobWorkflow, [jobId, base]);
+    await prisma.job.update({
+      where: { id: jobId },
+      data: { workflowRunId: run.runId },
+    });
+    jobLog("start", "workflow started", { jobId, workflowRunId: run.runId });
     return true;
   } catch (err) {
     jobLogError("start", "workflow start failed", {
