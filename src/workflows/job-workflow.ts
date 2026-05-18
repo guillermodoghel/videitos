@@ -604,7 +604,7 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
                 status: WEBHOOK_JOB_STATUS.ERROR,
                 jobId,
                 operationName,
-                error: "Dropbox upload rate limit retries exhausted",
+                error: JOB_ERROR.DROPBOX_UPLOAD_FAILED,
               });
               return;
             }

@@ -28,7 +28,11 @@ import {
   uploadJobOutputVideo,
 } from "@/lib/s3";
 import { persistRunwayVideoUri } from "@/lib/persist-runway-video-uri";
-import { resolveRunwayVideoUriForJob } from "@/lib/resolve-runway-video-uri";
+import { isDropboxUploadRetryError, resolveRunwayVideoUriForJob } from "@/lib/resolve-runway-video-uri";
+import {
+  buildJobOutputDropboxFileName,
+  joinDropboxDestinationPath,
+} from "@/lib/job-output-dropbox-path";
 
 export type CompleteJobWithRunwayVideoResult =
   | { outcome: "completed"; outputDropboxPath: string }
@@ -67,7 +71,7 @@ export function getReadyCallbackDecision(
     return { proceed: false, reason: "already_completed" };
   }
   if (job.status === JOB_STATUS.FAILED) {
-    if (job.errorMessage === JOB_ERROR.DROPBOX_UPLOAD_FAILED) {
+    if (isDropboxUploadRetryError(job.errorMessage)) {
       return { proceed: true, reason: "dropbox_retry" };
     }
     return { proceed: false, reason: "already_failed" };
@@ -300,8 +304,8 @@ export async function completeJobWithRunwayVideo(params: {
 
   const rawBaseName = job.dropboxSourceFilePath.split("/").pop()?.replace(/\.[^.]+$/, "") ?? "video";
   const baseName = sanitizeOutputFileBaseName(rawBaseName);
-  const outputFileName = `${baseName}-videitos-${job.id.slice(-8)}.mp4`;
-  const outputPath = destPath.endsWith("/") ? `${destPath}${outputFileName}` : `${destPath}/${outputFileName}`;
+  const outputFileName = await buildJobOutputDropboxFileName(job.id, baseName);
+  const outputPath = joinDropboxDestinationPath(destPath, outputFileName);
 
   await prisma.job.update({
     where: { id: job.id },

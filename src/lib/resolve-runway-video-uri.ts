@@ -59,6 +59,29 @@ export async function resolveRunwayVideoUriForJob(jobId: string): Promise<string
   return null;
 }
 
+/** Error messages that mean generation failed — not a Dropbox-only retry. */
+const NON_DROPBOX_UPLOAD_RETRY_ERRORS = new Set<string>([
+  JOB_ERROR.CANCELED,
+  JOB_ERROR.INSUFFICIENT_CREDITS,
+  JOB_ERROR.INSUFFICIENT_CREDITS_CODE,
+  JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS,
+  JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS_CODE,
+  JOB_ERROR.NO_RUNWAY_API_KEY,
+  JOB_ERROR.UNSUPPORTED_MODEL,
+  JOB_ERROR.DROPBOX_NOT_CONNECTED,
+  "Failed to download video from Runway",
+  "Pre-generation: no valid reference images",
+  "Failed to download source image from Dropbox",
+]);
+
+export function isDropboxUploadRetryError(errorMessage: string | null): boolean {
+  if (!errorMessage) return false;
+  if (errorMessage === JOB_ERROR.DROPBOX_UPLOAD_FAILED) return true;
+  if (NON_DROPBOX_UPLOAD_RETRY_ERRORS.has(errorMessage)) return false;
+  const lower = errorMessage.toLowerCase();
+  return lower.includes("dropbox");
+}
+
 /** Whether Dropbox-only retry is possible without re-running generation. */
 export function jobCanRetryDropboxUpload(job: {
   status: string;
@@ -68,7 +91,7 @@ export function jobCanRetryDropboxUpload(job: {
 }): boolean {
   return (
     job.status === JOB_STATUS.FAILED &&
-    job.errorMessage === JOB_ERROR.DROPBOX_UPLOAD_FAILED &&
+    isDropboxUploadRetryError(job.errorMessage) &&
     (!!job.runwayOutputVideoUri || !!job.providerOperationId)
   );
 }

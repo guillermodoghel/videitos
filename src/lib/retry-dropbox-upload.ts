@@ -3,8 +3,8 @@ import { JOB_STATUS } from "@/lib/constants/job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 import { JOB_WORKFLOW_PHASE } from "@/lib/constants/job-workflow-phase";
 import { completeJobWithRunwayVideo } from "@/lib/complete-job-with-runway-video";
-import { resolveRunwayVideoUriForJob, jobCanRetryDropboxUpload } from "@/lib/resolve-runway-video-uri";
-import { getObjectBody, pendingJobVideoKey } from "@/lib/s3";
+import { jobCanRetryDropboxUpload } from "@/lib/resolve-runway-video-uri";
+import { hasRecoverableJobVideo } from "@/lib/load-job-video-buffer";
 import { jobLog, jobLogError } from "@/lib/job-log";
 
 export type RetryDropboxUploadResult =
@@ -15,6 +15,18 @@ export type RetryDropboxUploadResult =
       status: number;
       retryAfterSeconds?: number;
     };
+
+async function markDropboxUploadFailed(jobId: string, workflowPhase: string | null): Promise<void> {
+  await prisma.job.update({
+    where: { id: jobId },
+    data: {
+      status: JOB_STATUS.FAILED,
+      errorMessage: JOB_ERROR.DROPBOX_UPLOAD_FAILED,
+      workflowPhase,
+      completedAt: new Date(),
+    },
+  });
+}
 
 /**
  * Re-upload a Runway video to Dropbox using the stored output URL (no new generation).
@@ -42,9 +54,9 @@ export async function retryDropboxUploadForJob(
     return { ok: false, error: "Forbidden", status: 403 };
   }
 
-  const pendingKey = pendingJobVideoKey(job.userId, job.id);
-  const hasS3 = !!(await getObjectBody(pendingKey));
-  if (!jobCanRetryDropboxUpload(job) && !hasS3) {
+  const canRetry = jobCanRetryDropboxUpload(job);
+  const hasVideo = await hasRecoverableJobVideo(jobId);
+  if (!canRetry && !hasVideo) {
     return {
       ok: false,
       error: `Job cannot retry Dropbox upload (status: ${job.status})`,
@@ -52,8 +64,7 @@ export async function retryDropboxUploadForJob(
     };
   }
 
-  const videoUri = await resolveRunwayVideoUriForJob(jobId);
-  if (!videoUri && !hasS3) {
+  if (!hasVideo) {
     return {
       ok: false,
       error:
@@ -66,6 +77,7 @@ export async function retryDropboxUploadForJob(
     jobId,
     userId: job.userId,
     providerOperationId: job.providerOperationId,
+    hadExplicitDropboxError: canRetry,
   });
 
   await prisma.job.update({
@@ -80,7 +92,7 @@ export async function retryDropboxUploadForJob(
 
   const result = await completeJobWithRunwayVideo({
     jobId,
-    videoUri: videoUri ?? undefined,
+    videoUri: job.runwayOutputVideoUri ?? undefined,
     operationName: job.providerOperationId,
     source: "retry-dropbox-upload",
   });
@@ -93,16 +105,15 @@ export async function retryDropboxUploadForJob(
     return { ok: true, outputDropboxPath: result.outputDropboxPath };
   }
 
+  if (result.outcome === "already_completed") {
+    return {
+      ok: true,
+      outputDropboxPath: result.outputDropboxPath ?? "",
+    };
+  }
+
   if (result.outcome === "dropbox_rate_limited") {
-    await prisma.job.update({
-      where: { id: jobId },
-      data: {
-        status: JOB_STATUS.FAILED,
-        errorMessage: JOB_ERROR.DROPBOX_UPLOAD_FAILED,
-        workflowPhase: JOB_WORKFLOW_PHASE.UPLOADING,
-        completedAt: new Date(),
-      },
-    });
+    await markDropboxUploadFailed(jobId, JOB_WORKFLOW_PHASE.WAITING_DROPBOX_RATE_LIMIT);
     return {
       ok: false,
       error: `Dropbox rate limited. Try again in about ${result.retryAfterSeconds} seconds.`,
@@ -116,9 +127,9 @@ export async function retryDropboxUploadForJob(
       ? result.error
       : result.outcome === "skipped"
         ? `Upload skipped: ${result.reason}`
-        : result.outcome === "already_completed"
-          ? "Job already completed"
-          : "Upload retry failed";
+        : "Upload retry failed";
+
+  await markDropboxUploadFailed(jobId, JOB_WORKFLOW_PHASE.UPLOADING);
 
   jobLogError("retry-dropbox", "upload retry failed", {
     jobId,
@@ -128,7 +139,7 @@ export async function retryDropboxUploadForJob(
 
   return {
     ok: false,
-    error: failureMessage,
+    error: failureMessage === "Upload failed" ? JOB_ERROR.DROPBOX_UPLOAD_FAILED : failureMessage,
     status: 500,
   };
 }

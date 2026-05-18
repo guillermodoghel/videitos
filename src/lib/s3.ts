@@ -222,6 +222,20 @@ export async function deletePendingJobVideo(userId: string, jobId: string): Prom
     .catch(() => undefined);
 }
 
+/** Remove dashboard output cache (e.g. before retake so playback does not show the previous video). */
+export async function deleteJobOutputVideo(userId: string, jobId: string): Promise<void> {
+  const client = getClient();
+  if (!client || !bucket) return;
+  await client
+    .send(
+      new DeleteObjectCommand({
+        Bucket: bucket,
+        Key: jobOutputVideoKey(userId, jobId),
+      })
+    )
+    .catch(() => undefined);
+}
+
 export async function uploadReferenceImage(
   userId: string,
   templateId: string,
