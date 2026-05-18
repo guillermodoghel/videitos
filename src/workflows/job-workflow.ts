@@ -19,6 +19,7 @@ import { setJobWorkflowPhase } from "@/lib/set-job-workflow-phase";
 import {
   RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY,
   RATE_LIMIT_WORKFLOW_RETRY_SECONDS,
+  DROPBOX_UPLOAD_WORKFLOW_RETRY,
 } from "@/lib/constants/job-retry";
 
 export type ProcessStepResult =
@@ -175,6 +176,21 @@ async function pollRunwayTask_step(
   return status;
 }
 
+type WebhookStepResult =
+  | { jobCompleted: true }
+  | { jobCompleted: false; retryable: true; retryAfterSeconds: number }
+  | { jobCompleted: false; skipped?: boolean; reason?: string };
+
+async function workflowWait_dropboxUpload_step(
+  jobId: string,
+  attempt: number,
+  sleepSeconds: number
+): Promise<void> {
+  "use step";
+  jobLog("workflow:wait", "Dropbox upload rate limit wait", { jobId, attempt, sleepSeconds });
+  await setJobWorkflowPhase(jobId, JOB_WORKFLOW_PHASE.UPLOADING);
+}
+
 async function webhookJob_step(
   baseUrl: string,
   body: {
@@ -184,7 +200,7 @@ async function webhookJob_step(
     videoUri?: string;
     error?: string;
   }
-): Promise<void> {
+): Promise<WebhookStepResult> {
   "use step";
 
   const url = `${baseUrl.replace(/\/$/, "")}/api/webhook/job`;
@@ -217,23 +233,46 @@ async function webhookJob_step(
   }
 
   if (body.status === WEBHOOK_JOB_STATUS.READY) {
-    let payload: { jobCompleted?: boolean; skipped?: boolean; reason?: string } = {};
+    let payload: {
+      jobCompleted?: boolean;
+      retryable?: boolean;
+      retryAfterSeconds?: number;
+      skipped?: boolean;
+      reason?: string;
+    } = {};
     try {
       payload = (await res.json()) as typeof payload;
     } catch {
       throw new Error("webhook/job returned invalid JSON");
     }
-    if (!payload.jobCompleted) {
-      jobLogError("workflow:webhook", "ready callback did not complete job", {
+    if (payload.jobCompleted) {
+      jobLog("workflow:webhook", "step succeeded — job completed", {
         jobId: body.jobId,
-        skipped: payload.skipped ?? false,
-        reason: payload.reason ?? null,
         elapsedMs,
       });
-      throw new Error(
-        `webhook/job did not complete job${payload.reason ? `: ${payload.reason}` : ""}`
-      );
+      return { jobCompleted: true };
     }
+    if (payload.retryable && payload.retryAfterSeconds) {
+      jobLog("workflow:webhook", "Dropbox rate limited — workflow will retry upload", {
+        jobId: body.jobId,
+        retryAfterSeconds: payload.retryAfterSeconds,
+        elapsedMs,
+      });
+      return {
+        jobCompleted: false,
+        retryable: true,
+        retryAfterSeconds: payload.retryAfterSeconds,
+      };
+    }
+    jobLogError("workflow:webhook", "ready callback did not complete job", {
+      jobId: body.jobId,
+      skipped: payload.skipped ?? false,
+      reason: payload.reason ?? null,
+      elapsedMs,
+    });
+    throw new Error(
+      `webhook/job did not complete job${payload.reason ? `: ${payload.reason}` : ""}`
+    );
   }
 
   jobLog("workflow:webhook", "step succeeded", {
@@ -241,6 +280,7 @@ async function webhookJob_step(
     status: body.status,
     elapsedMs,
   });
+  return { jobCompleted: false };
 }
 
 export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promise<void> {
@@ -330,12 +370,46 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
           pollAttempts: pollAttempt,
           elapsedMs: Date.now() - workflowStartedAt,
         });
-        await webhookJob_step(callbackBaseUrl, {
-          status: WEBHOOK_JOB_STATUS.READY,
-          jobId,
-          operationName,
-          videoUri: status.videoUri,
-        });
+        const videoUri = status.videoUri;
+        let uploadAttempt = 0;
+        for (;;) {
+          uploadAttempt += 1;
+          const webhookResult = await webhookJob_step(callbackBaseUrl, {
+            status: WEBHOOK_JOB_STATUS.READY,
+            jobId,
+            operationName,
+            videoUri,
+          });
+          if (webhookResult.jobCompleted) break;
+          if (webhookResult.retryable && webhookResult.retryAfterSeconds) {
+            if (uploadAttempt >= DROPBOX_UPLOAD_WORKFLOW_RETRY.maxAttempts) {
+              jobLogError("workflow", "Dropbox upload retries exhausted", {
+                jobId,
+                attempts: uploadAttempt,
+              });
+              await webhookJob_step(callbackBaseUrl, {
+                status: WEBHOOK_JOB_STATUS.ERROR,
+                jobId,
+                operationName,
+                error: "Dropbox upload rate limit retries exhausted",
+              });
+              return;
+            }
+            await workflowWait_dropboxUpload_step(
+              jobId,
+              uploadAttempt,
+              webhookResult.retryAfterSeconds
+            );
+            jobLog("workflow", "sleeping before Dropbox upload retry", {
+              jobId,
+              uploadAttempt,
+              sleepSeconds: webhookResult.retryAfterSeconds,
+            });
+            await sleep(`${webhookResult.retryAfterSeconds} seconds`);
+            continue;
+          }
+          throw new Error("webhook/job ready callback failed unexpectedly");
+        }
         jobLog("workflow", "run finished successfully", {
           jobId,
           operationName,

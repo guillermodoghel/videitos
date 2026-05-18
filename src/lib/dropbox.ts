@@ -12,6 +12,7 @@ import {
   isRetryableHttpStatus,
   sleep,
 } from "@/lib/http-retry";
+import { DROPBOX_MAX_INLINE_BACKOFF_MS, DropboxRateLimitError } from "@/lib/dropbox-rate-limit";
 
 const DROPBOX_AUTH = "https://www.dropbox.com/oauth2/authorize";
 const STATE_JWT_ALG = "HS256";
@@ -590,6 +591,16 @@ export async function uploadFile(
       return null;
     }
     const waitMs = backoffMs(attempt, retryAfter);
+    if (waitMs > DROPBOX_MAX_INLINE_BACKOFF_MS) {
+      const retryAfterSeconds = Math.ceil(waitMs / 1000);
+      console.error("[Dropbox upload] rate limited — deferring to workflow retry", {
+        ...logContext,
+        requestId,
+        retryAfterSeconds,
+        waitMs,
+      });
+      throw new DropboxRateLimitError(retryAfterSeconds);
+    }
     console.error("[Dropbox upload] backing off before retry", {
       ...logContext,
       requestId,

@@ -76,6 +76,13 @@ export async function reconcileStuckProcessingJobs(opts?: {
         source: "reconcile-stuck-jobs",
       });
 
+      if (result.outcome === "dropbox_rate_limited") {
+        jobLog("reconcile", "Dropbox rate limited — skip until next poll", {
+          jobId: job.id,
+          retryAfterSeconds: result.retryAfterSeconds,
+        });
+        continue;
+      }
       if (result.outcome === "completed" || result.outcome === "already_completed") {
         reconciled += 1;
         jobLog("reconcile", "job reconciled", { jobId: job.id, outcome: result.outcome });

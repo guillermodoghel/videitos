@@ -116,6 +116,18 @@ export async function POST(request: NextRequest) {
       reason: result.reason,
     });
   }
+  if (result.outcome === "dropbox_rate_limited") {
+    jobLog("webhook", "Dropbox rate limited — workflow will retry", {
+      jobId: job.id,
+      retryAfterSeconds: result.retryAfterSeconds,
+    });
+    return NextResponse.json({
+      ok: true,
+      jobCompleted: false,
+      retryable: true,
+      retryAfterSeconds: result.retryAfterSeconds,
+    });
+  }
 
   return NextResponse.json(
     { ok: false, jobCompleted: false, error: result.error },

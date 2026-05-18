@@ -16,11 +16,13 @@ import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 import { CREDIT_KIND } from "@/lib/constants/credit-transaction-kind";
 import { JOB_WORKFLOW_PHASE } from "@/lib/constants/job-workflow-phase";
 import { jobLog, jobLogError } from "@/lib/job-log";
+import { isDropboxRateLimitError } from "@/lib/dropbox-rate-limit";
 
 export type CompleteJobWithRunwayVideoResult =
   | { outcome: "completed"; outputDropboxPath: string }
   | { outcome: "already_completed"; outputDropboxPath: string | null }
   | { outcome: "skipped"; reason: string }
+  | { outcome: "dropbox_rate_limited"; retryAfterSeconds: number }
   | { outcome: "failed"; error: string };
 
 type JobForReady = {
@@ -231,25 +233,38 @@ export async function completeJobWithRunwayVideo(params: {
     data: { workflowPhase: JOB_WORKFLOW_PHASE.UPLOADING },
   });
 
-  const uploadResult = await uploadFile(token, outputPath, videoBuffer, {
-    mode: "add",
-    onUnauthorized: () => getValidAccessTokenWithOptions(job.userId, { forceRefresh: true }),
-    logContext: {
-      source,
-      jobId: job.id,
-      userId: job.userId,
-      templateId: job.templateId,
-      templateModel: template?.model ?? null,
-      providerOperationId: operationName ?? job.providerOperationId,
-      dropboxDestinationPath: destPath,
-      outputPath,
-      dropboxSourceFilePath: job.dropboxSourceFilePath,
-      hasPreGenImage: !!job.preGenImageKey,
-      videoBufferBytes: videoBuffer.byteLength,
-      videoUriLength: videoUri.length,
-      videoUriHost,
-    },
-  });
+  let uploadResult: { path_display?: string } | null;
+  try {
+    uploadResult = await uploadFile(token, outputPath, videoBuffer, {
+      mode: "add",
+      onUnauthorized: () => getValidAccessTokenWithOptions(job.userId, { forceRefresh: true }),
+      logContext: {
+        source,
+        jobId: job.id,
+        userId: job.userId,
+        templateId: job.templateId,
+        templateModel: template?.model ?? null,
+        providerOperationId: operationName ?? job.providerOperationId,
+        dropboxDestinationPath: destPath,
+        outputPath,
+        dropboxSourceFilePath: job.dropboxSourceFilePath,
+        hasPreGenImage: !!job.preGenImageKey,
+        videoBufferBytes: videoBuffer.byteLength,
+        videoUriLength: videoUri.length,
+        videoUriHost,
+      },
+    });
+  } catch (err) {
+    if (isDropboxRateLimitError(err)) {
+      jobLog("complete", "Dropbox rate limited — deferring retry", {
+        jobId: job.id,
+        retryAfterSeconds: err.retryAfterSeconds,
+        source,
+      });
+      return { outcome: "dropbox_rate_limited", retryAfterSeconds: err.retryAfterSeconds };
+    }
+    throw err;
+  }
 
   if (!uploadResult) {
     await prisma.job.update({
