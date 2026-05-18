@@ -6,6 +6,7 @@ import { VIDEO_MODELS } from "@/lib/video-models";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 import { getJobWorkflowPhaseLabel } from "@/lib/job-workflow-phase-label";
+import { JobWorkflowProgressGraph } from "./JobWorkflowProgressGraph";
 
 type JobRow = {
   id: string;
@@ -186,6 +187,13 @@ function JobDetailsPanel({
 
   return (
     <div className="space-y-4">
+      <JobWorkflowProgressGraph
+        status={job.status}
+        workflowPhase={job.workflowPhase}
+        errorMessage={job.errorMessage}
+        runwayProgress={job.runwayProgress}
+        runwayPollStatus={job.runwayPollStatus}
+      />
       <div>
         <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           IDs
