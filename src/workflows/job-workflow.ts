@@ -10,6 +10,7 @@ import {
   resetJobForRunwayCreditsRetry,
 } from "@/lib/process-job";
 import { jobLog, jobLogError } from "@/lib/job-log";
+import { workflowStepLog } from "@/lib/workflow-step-log";
 import type { WorkflowProcessJobResponse } from "@/lib/workflow-process-job-response";
 import { isRunwayInsufficientCreditsError } from "@/lib/runway-errors";
 import { WEBHOOK_JOB_STATUS } from "@/lib/constants/webhook-job-status";
@@ -33,7 +34,9 @@ async function workflowPhase_step(
   phase: (typeof JOB_WORKFLOW_PHASE)[keyof typeof JOB_WORKFLOW_PHASE]
 ): Promise<void> {
   "use step";
+  workflowStepLog("set_phase", "updating dashboard phase", { jobId, phase });
   await setJobWorkflowPhase(jobId, phase);
+  workflowStepLog("set_phase", "phase updated", { jobId, phase });
 }
 
 async function processJob_step(
@@ -58,7 +61,7 @@ async function processJob_step(
       "Content-Type": "application/json",
       "x-internal-secret": secret,
     },
-    body: JSON.stringify({ jobId }),
+    body: JSON.stringify({ jobId, attempt }),
   });
   if (!res.ok) {
     jobLog("workflow:process", "HTTP error — retrying once", {
@@ -72,7 +75,7 @@ async function processJob_step(
         "Content-Type": "application/json",
         "x-internal-secret": secret,
       },
-      body: JSON.stringify({ jobId }),
+      body: JSON.stringify({ jobId, attempt }),
     });
   }
 
@@ -124,8 +127,14 @@ async function workflowWait_rateLimit_step(
   sleepSeconds: number
 ): Promise<void> {
   "use step";
-  jobLog("workflow:wait", "rate limit wait", { jobId, attempt, sleepSeconds });
+  workflowStepLog("wait_rate_limit", "entering rate-limit wait", {
+    jobId,
+    attempt,
+    sleepSeconds,
+    nextPhase: JOB_WORKFLOW_PHASE.WAITING_RATE_LIMIT,
+  });
   await setJobWorkflowPhase(jobId, JOB_WORKFLOW_PHASE.WAITING_RATE_LIMIT);
+  workflowStepLog("wait_rate_limit", "ready to sleep", { jobId, attempt, sleepSeconds });
 }
 
 async function workflowWait_runwayCredits_step(
@@ -134,8 +143,14 @@ async function workflowWait_runwayCredits_step(
   sleepSeconds: number
 ): Promise<void> {
   "use step";
-  jobLog("workflow:wait", "Runway credits wait", { jobId, attempt, sleepSeconds });
+  workflowStepLog("wait_runway_credits", "entering Runway credits wait", {
+    jobId,
+    attempt,
+    sleepSeconds,
+    nextPhase: JOB_WORKFLOW_PHASE.WAITING_RUNWAY_CREDITS,
+  });
   await setJobWorkflowPhase(jobId, JOB_WORKFLOW_PHASE.WAITING_RUNWAY_CREDITS);
+  workflowStepLog("wait_runway_credits", "ready to sleep", { jobId, attempt, sleepSeconds });
 }
 
 async function workflowWait_poll_step(
@@ -144,18 +159,31 @@ async function workflowWait_poll_step(
   pollAttempt: number
 ): Promise<void> {
   "use step";
-  jobLog("workflow:wait", "poll wait", { jobId, operationName, pollAttempt });
+  workflowStepLog("wait_poll", "between Runway polls", {
+    jobId,
+    operationName,
+    pollAttempt,
+    nextPhase: JOB_WORKFLOW_PHASE.POLLING,
+  });
   await setJobWorkflowPhase(jobId, JOB_WORKFLOW_PHASE.POLLING);
 }
 
 async function failRunwayInsufficientCredits_step(jobId: string): Promise<void> {
   "use step";
+  workflowStepLog("fail_runway_credits", "marking job failed — Runway credits exhausted", {
+    jobId,
+  });
   await markJobFailedRunwayInsufficientCredits(jobId);
+  workflowStepLog("fail_runway_credits", "job marked failed", { jobId });
 }
 
 async function resetRunwayCreditsRetry_step(jobId: string): Promise<void> {
   "use step";
+  workflowStepLog("reset_runway_credits", "resetting job to retry after Runway credits error", {
+    jobId,
+  });
   await resetJobForRunwayCreditsRetry(jobId);
+  workflowStepLog("reset_runway_credits", "job reset — will re-enter process phase", { jobId });
 }
 
 async function isJobCompleted_step(jobId: string): Promise<boolean> {
@@ -164,16 +192,28 @@ async function isJobCompleted_step(jobId: string): Promise<boolean> {
     where: { id: jobId },
     select: { status: true },
   });
-  return job?.status === JOB_STATUS.COMPLETED;
+  const completed = job?.status === JOB_STATUS.COMPLETED;
+  workflowStepLog("check_completed", completed ? "job already completed" : "job not completed yet", {
+    jobId,
+    status: job?.status ?? null,
+    completed,
+  });
+  return completed;
 }
 
 async function isJobCanceled_step(jobId: string): Promise<boolean> {
   "use step";
   const job = await prisma.job.findUnique({
     where: { id: jobId },
-    select: { errorMessage: true },
+    select: { status: true, errorMessage: true },
   });
-  return isJobCanceled(job?.errorMessage);
+  const canceled = isJobCanceled(job?.errorMessage);
+  workflowStepLog("check_canceled", canceled ? "job is canceled" : "job not canceled", {
+    jobId,
+    status: job?.status ?? null,
+    canceled,
+  });
+  return canceled;
 }
 
 async function pollRunwayTask_step(
@@ -197,7 +237,7 @@ async function pollRunwayTask_step(
   let res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ jobId, operationName }),
+    body: JSON.stringify({ jobId, operationName, pollAttempt: attempt }),
   });
   if (!res.ok) {
     jobLog("workflow:poll", "job-status HTTP error — retrying once", {
@@ -209,7 +249,7 @@ async function pollRunwayTask_step(
     res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jobId, operationName }),
+      body: JSON.stringify({ jobId, operationName, pollAttempt: attempt }),
     });
   }
   const elapsedMs = Date.now() - startedAt;
@@ -232,6 +272,14 @@ async function pollRunwayTask_step(
     runwayStatus?: string;
     progress?: number;
   };
+  const nextAction =
+    status.done && status.videoUri
+      ? "upload"
+      : status.done && status.error
+        ? "handle_error"
+        : status.done
+          ? "handle_missing_output"
+          : "sleep_and_poll_again";
   jobLog("workflow:poll", "step result", {
     jobId,
     operationName,
@@ -241,6 +289,7 @@ async function pollRunwayTask_step(
     done: status.done,
     hasVideoUri: !!status.videoUri,
     error: status.error ?? null,
+    nextAction,
     elapsedMs,
   });
   return status;
@@ -257,8 +306,14 @@ async function workflowWait_dropboxUpload_step(
   sleepSeconds: number
 ): Promise<void> {
   "use step";
-  jobLog("workflow:wait", "Dropbox upload rate limit wait", { jobId, attempt, sleepSeconds });
+  workflowStepLog("wait_dropbox_upload", "entering Dropbox rate-limit wait", {
+    jobId,
+    attempt,
+    sleepSeconds,
+    nextPhase: JOB_WORKFLOW_PHASE.WAITING_DROPBOX_RATE_LIMIT,
+  });
   await setJobWorkflowPhase(jobId, JOB_WORKFLOW_PHASE.WAITING_DROPBOX_RATE_LIMIT);
+  workflowStepLog("wait_dropbox_upload", "ready to sleep", { jobId, attempt, sleepSeconds });
 }
 
 async function webhookJob_step(
@@ -269,6 +324,7 @@ async function webhookJob_step(
     operationName?: string;
     videoUri?: string;
     error?: string;
+    uploadAttempt?: number;
   }
 ): Promise<WebhookStepResult> {
   "use step";
@@ -280,6 +336,7 @@ async function webhookJob_step(
     operationName: body.operationName ?? null,
     hasVideoUri: !!body.videoUri,
     error: body.error ?? null,
+    uploadAttempt: body.uploadAttempt ?? null,
     url,
   });
   const startedAt = Date.now();
@@ -361,12 +418,17 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
 
   async function stopIfCanceled(phase: string): Promise<boolean> {
     if (await isJobCanceled_step(jobId)) {
-      jobLog("workflow", "run stopped — job canceled", { jobId, phase });
+      jobLog("workflow", "run stopped — job canceled", {
+        jobId,
+        checkpoint: phase,
+        elapsedMs: Date.now() - workflowStartedAt,
+      });
       return true;
     }
     return false;
   }
 
+  jobLog("workflow", "entering process phase loop", { jobId });
   await workflowPhase_step(jobId, JOB_WORKFLOW_PHASE.STARTING);
   if (await stopIfCanceled("starting")) return;
 
@@ -425,6 +487,12 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
           runwayCreditsWaitAttempts,
         });
         await sleep(`${stepResult.retryAfterSeconds} seconds`);
+        jobLog("workflow", "sleep finished — resuming process", {
+          jobId,
+          reason: stepResult.retryReason,
+          sleptSeconds: stepResult.retryAfterSeconds,
+          processAttempt,
+        });
         if (await stopIfCanceled("process_retry_sleep")) return;
         continue;
       }
@@ -445,11 +513,22 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
       return;
     }
 
+    jobLog("workflow", "entering poll phase loop", {
+      jobId,
+      operationName,
+      maxPollAttempts: RUNWAY_POLL_WORKFLOW.maxAttempts,
+    });
     let pollAttempt = 0;
     for (;;) {
       if (await stopIfCanceled("poll")) return;
 
       pollAttempt += 1;
+      jobLog("workflow", "poll iteration", {
+        jobId,
+        operationName,
+        pollAttempt,
+        maxAttempts: RUNWAY_POLL_WORKFLOW.maxAttempts,
+      });
 
       if (pollAttempt > RUNWAY_POLL_WORKFLOW.maxAttempts) {
         jobLogError("workflow", "poll timeout waiting for Runway", {
@@ -487,16 +566,24 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
           elapsedMs: Date.now() - workflowStartedAt,
         });
         const videoUri = status.videoUri;
+        jobLog("workflow", "entering upload phase loop", { jobId, operationName });
         let uploadAttempt = 0;
         for (;;) {
           if (await stopIfCanceled("dropbox_upload")) return;
 
           uploadAttempt += 1;
+          jobLog("workflow", "upload iteration", {
+            jobId,
+            operationName,
+            uploadAttempt,
+            maxAttempts: DROPBOX_UPLOAD_WORKFLOW_RETRY.maxAttempts,
+          });
           const webhookResult = await webhookJob_step(callbackBaseUrl, {
             status: WEBHOOK_JOB_STATUS.READY,
             jobId,
             operationName,
             videoUri,
+            uploadAttempt,
           });
           if (webhookResult.jobCompleted) break;
           if (
@@ -528,6 +615,11 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
               sleepSeconds: retryAfterSeconds,
             });
             await sleep(`${retryAfterSeconds} seconds`);
+            jobLog("workflow", "sleep finished — resuming Dropbox upload", {
+              jobId,
+              uploadAttempt,
+              sleptSeconds: retryAfterSeconds,
+            });
             if (await stopIfCanceled("dropbox_upload_retry_sleep")) return;
             continue;
           }
@@ -579,6 +671,11 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
             RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY.intervalSeconds
           );
           await sleep(`${RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY.intervalSeconds} seconds`);
+          jobLog("workflow", "sleep finished — restarting process after Runway credits", {
+            jobId,
+            runwayCreditsWaitAttempts,
+            sleptSeconds: RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY.intervalSeconds,
+          });
           if (await stopIfCanceled("runway_credits_poll_sleep")) return;
           continue main;
         }
@@ -613,6 +710,14 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
         sleepSeconds,
       });
       await sleep(`${sleepSeconds} seconds`);
+      jobLog("workflow", "sleep finished — next poll", {
+        jobId,
+        operationName,
+        pollAttempt,
+        sleptSeconds: sleepSeconds,
+        lastRunwayStatus: status.runwayStatus ?? null,
+        lastProgress: status.progress ?? null,
+      });
       if (await stopIfCanceled("poll_sleep")) return;
     }
   }

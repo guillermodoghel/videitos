@@ -23,6 +23,7 @@ export async function POST(request: NextRequest) {
     error?: string;
     operationName?: string;
     jobId?: string;
+    uploadAttempt?: number;
   };
   try {
     body = await request.json();
@@ -35,11 +36,14 @@ export async function POST(request: NextRequest) {
   const errorMsg = body.error;
   const operationName = body.operationName;
   const jobId = body.jobId;
+  const uploadAttempt =
+    typeof body.uploadAttempt === "number" ? body.uploadAttempt : null;
 
   jobLog("webhook", "request received", {
     status,
     jobId: jobId ?? null,
     operationName: operationName ?? null,
+    uploadAttempt,
     hasVideoUri: !!videoUri,
     error: errorMsg ?? null,
   });
@@ -78,21 +82,47 @@ export async function POST(request: NextRequest) {
 
   const job = await findJob(jobId, operationName);
   if (!job) {
-    jobLogError("webhook", "ready callback — job not found", { jobId, operationName });
+    jobLogError("webhook", "ready callback — job not found", {
+      jobId,
+      operationName,
+      uploadAttempt,
+    });
     return NextResponse.json(
       { error: "Job not found" },
       { status: 404 }
     );
   }
 
+  jobLog("webhook", "starting completeJobWithRunwayVideo", {
+    jobId: job.id,
+    operationName,
+    uploadAttempt,
+    jobStatus: job.status,
+    hasOutputPath: !!job.outputDropboxPath,
+  });
+
+  const completeStartedAt = Date.now();
   const result = await completeJobWithRunwayVideo({
     jobId: job.id,
     videoUri,
     operationName,
     source: "webhook/job",
   });
+  const completeElapsedMs = Date.now() - completeStartedAt;
+
+  jobLog("webhook", "completeJobWithRunwayVideo finished", {
+    jobId: job.id,
+    uploadAttempt,
+    outcome: result.outcome,
+    elapsedMs: completeElapsedMs,
+  });
 
   if (result.outcome === "completed") {
+    jobLog("webhook", "job completed via ready callback", {
+      jobId: job.id,
+      uploadAttempt,
+      outputDropboxPath: result.outputDropboxPath,
+    });
     return NextResponse.json({
       ok: true,
       jobCompleted: true,
@@ -100,6 +130,10 @@ export async function POST(request: NextRequest) {
     });
   }
   if (result.outcome === "already_completed") {
+    jobLog("webhook", "job already completed — idempotent skip", {
+      jobId: job.id,
+      uploadAttempt,
+    });
     return NextResponse.json({
       ok: true,
       jobCompleted: true,
@@ -132,6 +166,12 @@ export async function POST(request: NextRequest) {
     });
   }
 
+  jobLogError("webhook", "ready callback failed", {
+    jobId: job.id,
+    uploadAttempt,
+    error: result.error,
+    elapsedMs: completeElapsedMs,
+  });
   return NextResponse.json(
     { ok: false, jobCompleted: false, error: result.error },
     { status: 500 }

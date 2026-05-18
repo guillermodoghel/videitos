@@ -98,7 +98,8 @@ Full list with placeholders: [.env.example](../.env.example).
 
 - **Vercel dashboard** → Observability → Workflows: inspect runs, steps, failures.
 - **App dashboard** → Jobs list: `workflowPhase`, `runwayProgress`, `runwayPollStatus`.
-- Structured logs: `jobLog` / `jobLogError` with prefixes like `workflow:process`, `workflow:poll`.
+- Structured logs: `jobLog` / `jobLogError` with prefixes like `workflow:process`, `workflow:poll`, `workflow:step` (durable step name in `step` field), `process`, `status`, `webhook`, `complete`.
+- Filter Vercel Runtime logs by route (`/api/jobs/workflow/process`, `/api/job-status`, `/api/webhook/job`) or by `jobId` / `attempt` / `pollAttempt` / `uploadAttempt` in log fields.
 
 ## Retry constants (reference)
 

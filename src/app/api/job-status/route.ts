@@ -12,7 +12,7 @@ import { persistRunwayPollStatus } from "@/lib/persist-runway-poll-status";
  * Returns Runway task status. Only Runway is supported (operationName = Runway task id).
  */
 export async function POST(request: NextRequest) {
-  let body: { operationName?: string; jobId?: string };
+  let body: { operationName?: string; jobId?: string; pollAttempt?: number };
   try {
     body = await request.json();
   } catch {
@@ -21,8 +21,13 @@ export async function POST(request: NextRequest) {
 
   const operationName = body.operationName;
   const jobId = body.jobId;
+  const pollAttempt = typeof body.pollAttempt === "number" ? body.pollAttempt : null;
 
-  jobLog("status", "request received", { jobId: jobId ?? null, operationName: operationName ?? null });
+  jobLog("status", "request received", {
+    jobId: jobId ?? null,
+    operationName: operationName ?? null,
+    pollAttempt,
+  });
 
   if (!operationName || typeof operationName !== "string") {
     return NextResponse.json(
@@ -57,7 +62,13 @@ export async function POST(request: NextRequest) {
   }
 
   if (!isRunway || !apiKey) {
-    jobLogError("status", "unsupported or missing API key", { jobId, operationName, isRunway, hasApiKey: !!apiKey });
+    jobLogError("status", "unsupported or missing API key", {
+      jobId,
+      operationName,
+      pollAttempt,
+      isRunway,
+      hasApiKey: !!apiKey,
+    });
     return NextResponse.json(
       { done: true, error: "Unsupported model or missing Runway API key" },
       { status: 200 }
@@ -66,24 +77,43 @@ export async function POST(request: NextRequest) {
 
   try {
     const startedAt = Date.now();
+    jobLog("status", "fetching Runway task status", {
+      jobId,
+      operationName,
+      pollAttempt,
+    });
     const status = await getRunwayTaskStatus(apiKey, operationName);
+    const runwayElapsedMs = Date.now() - startedAt;
     if (jobId) {
       await persistRunwayPollStatus(jobId, {
         progress: status.progress,
         runwayStatus: status.runwayStatus,
       });
+      jobLog("status", "persisted poll status to DB", {
+        jobId,
+        pollAttempt,
+        runwayStatus: status.runwayStatus ?? null,
+        progress: status.progress ?? null,
+      });
     }
     if (status.done && status.videoUri && jobId) {
       await persistRunwayVideoUri(jobId, status.videoUri);
+      jobLog("status", "persisted Runway video URI for upload retries", {
+        jobId,
+        pollAttempt,
+        hasVideoUri: true,
+      });
     }
     jobLog("status", "Runway task status", {
       jobId,
       operationName,
+      pollAttempt,
       runwayStatus: status.runwayStatus ?? null,
       progress: status.progress ?? null,
       done: status.done,
       hasVideoUri: !!status.videoUri,
       error: status.error ?? null,
+      runwayElapsedMs,
       elapsedMs: Date.now() - startedAt,
     });
     return NextResponse.json(status);
