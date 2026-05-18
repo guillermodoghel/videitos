@@ -13,6 +13,7 @@ type JobRow = {
   templateName: string;
   model: string;
   dropboxSourceFilePath: string;
+  providerOperationId: string | null;
   sourceThumbnailUrl: string | null;
   outputDropboxPath: string | null;
   preGenImageKey: string | null;
@@ -172,6 +173,23 @@ function JobDetailsPanel({
 
   return (
     <div className="space-y-4">
+      <div>
+        <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+          IDs
+        </h4>
+        <dl className="space-y-1 text-sm">
+          <div>
+            <dt className="text-zinc-500 dark:text-zinc-400">Job ID</dt>
+            <dd className="break-all font-mono text-xs text-zinc-700 dark:text-zinc-300">{job.id}</dd>
+          </div>
+          <div>
+            <dt className="text-zinc-500 dark:text-zinc-400">Generation ID</dt>
+            <dd className="break-all font-mono text-xs text-zinc-700 dark:text-zinc-300">
+              {job.providerOperationId ?? "—"}
+            </dd>
+          </div>
+        </dl>
+      </div>
       <div>
         <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           Paths

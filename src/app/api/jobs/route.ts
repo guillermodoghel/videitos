@@ -85,6 +85,7 @@ export async function GET(request: NextRequest) {
     userId: j.userId,
     model: j.template.model,
     dropboxSourceFilePath: j.dropboxSourceFilePath,
+    providerOperationId: j.providerOperationId,
     sourceThumbnailUrl: thumbnailByJobId.get(j.id) ?? null,
     outputDropboxPath: j.outputDropboxPath,
     preGenImageKey: j.preGenImageKey ?? null,
