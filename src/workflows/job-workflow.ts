@@ -205,7 +205,7 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
         operationName,
         totalElapsedMs: Date.now() - workflowStartedAt,
         processAttempts: processAttempt,
-        pollAttempts,
+        pollAttempts: pollAttempt,
       });
       return;
     }
