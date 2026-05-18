@@ -5,6 +5,7 @@ import { downloadRunwayVideo } from "@/lib/runway";
 import { getRunwayApiKeyForUser } from "@/lib/runway-api-key";
 import {
   getObjectBody,
+  jobOutputVideoKey,
   pendingJobVideoKey,
   uploadJobOutputHistoryVideo,
 } from "@/lib/s3";
@@ -36,6 +37,7 @@ export async function archiveJobOutputHistory(jobId: string): Promise<void> {
   const hasOutput =
     !!job.outputDropboxPath ||
     !!job.runwayOutputVideoUri ||
+    !!(await getObjectBody(jobOutputVideoKey(job.userId, job.id))) ||
     !!(await getObjectBody(pendingJobVideoKey(job.userId, job.id)));
 
   if (!hasOutput) {
@@ -88,6 +90,9 @@ async function loadOutputVideoBuffer(job: {
   providerOperationId: string | null;
   user: { runwayApiKey: string | null };
 }): Promise<Buffer | null> {
+  const output = await getObjectBody(jobOutputVideoKey(job.userId, job.id));
+  if (output) return output;
+
   const pending = await getObjectBody(pendingJobVideoKey(job.userId, job.id));
   if (pending) return pending;
 

@@ -22,9 +22,9 @@ export function formatRunwayProgressPercent(
   progress: number | null | undefined,
   runwayStatus?: string | null
 ): string | null {
-  const normalized = normalizeRunwayProgress(progress, runwayStatus);
-  if (normalized == null) return null;
-  return `${Math.round(normalized * 100)}%`;
+  const fraction = runwayProgressFraction(progress, runwayStatus);
+  if (fraction == null) return null;
+  return `${Math.round(fraction * 100)}%`;
 }
 
 /** Human-readable detail for dashboard (poll status + optional %). */
@@ -55,6 +55,22 @@ export function appendRunwayProgressToLabel(
   progress: number | null | undefined
 ): string {
   const detail = formatRunwayTaskProgressDetail(runwayStatus, progress);
-  if (!detail) return baseLabel;
-  return `${baseLabel} (${detail})`;
+  if (detail) return `${baseLabel} (${detail})`;
+  // Stored progress without a matching poll status (e.g. between polls).
+  const pct = formatRunwayProgressPercent(progress, null);
+  if (pct) return `${baseLabel} (${pct})`;
+  return baseLabel;
+}
+
+/** 0–1 for progress bars; null when unknown. Keeps last fraction while THROTTLED/PENDING. */
+export function runwayProgressFraction(
+  progress: number | null | undefined,
+  runwayStatus?: string | null
+): number | null {
+  if (progress == null) return null;
+  const status = runwayStatus?.toUpperCase();
+  if (status === RUNWAY_TASK_STATUS.RUNNING) {
+    return normalizeRunwayProgress(progress, status);
+  }
+  return normalizeRunwayProgress(progress, null);
 }

@@ -14,13 +14,8 @@ export async function persistRunwayPollStatus(
   }
   if (runwayStatus === RUNWAY_TASK_STATUS.RUNNING && data.progress !== undefined) {
     update.runwayProgress = normalizeRunwayProgress(data.progress, runwayStatus);
-  } else if (
-    runwayStatus !== undefined &&
-    runwayStatus !== RUNWAY_TASK_STATUS.RUNNING
-  ) {
-    // PENDING / THROTTLED have no progress; avoid showing stale % from a prior RUNNING poll.
-    update.runwayProgress = null;
   }
+  // PENDING / THROTTLED: keep last RUNNING progress in DB for the dashboard between polls.
   if (Object.keys(update).length === 0) return;
 
   await prisma.job.update({

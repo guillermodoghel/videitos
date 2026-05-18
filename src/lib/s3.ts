@@ -3,6 +3,8 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  HeadObjectCommand,
+  CopyObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
@@ -99,6 +101,11 @@ export function pendingJobVideoKey(userId: string, jobId: string): string {
   return `${userId}/jobs/${jobId}/pending-upload.mp4`;
 }
 
+/** Permanent output video for dashboard playback (avoids Dropbox temporary links). */
+export function jobOutputVideoKey(userId: string, jobId: string): string {
+  return `${userId}/jobs/${jobId}/output.mp4`;
+}
+
 /** Permanent archived output after retake (version 1, 2, …). */
 export function jobOutputHistoryKey(userId: string, jobId: string, version: number): string {
   return `${userId}/jobs/${jobId}/outputs/v${version}.mp4`;
@@ -142,6 +149,64 @@ export async function uploadPendingJobVideo(
     })
   );
   return key;
+}
+
+export async function uploadJobOutputVideo(
+  userId: string,
+  jobId: string,
+  buffer: Buffer
+): Promise<string | null> {
+  const client = getClient();
+  if (!client || !bucket) return null;
+  const key = jobOutputVideoKey(userId, jobId);
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: buffer,
+      ContentType: "video/mp4",
+      CacheControl: "private, max-age=31536000",
+    })
+  );
+  return key;
+}
+
+export async function s3ObjectExists(key: string): Promise<boolean> {
+  const client = getClient();
+  if (!client || !bucket) return false;
+  try {
+    await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Copy within the same bucket (e.g. pending upload → permanent output). */
+export async function copyS3Object(sourceKey: string, destKey: string): Promise<boolean> {
+  const client = getClient();
+  if (!client || !bucket) return false;
+  try {
+    await client.send(
+      new CopyObjectCommand({
+        Bucket: bucket,
+        CopySource: `${bucket}/${sourceKey}`,
+        Key: destKey,
+        ContentType: "video/mp4",
+        CacheControl: "private, max-age=31536000",
+        MetadataDirective: "REPLACE",
+      })
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Presigned GET URL only when the object exists. */
+export async function getPresignedUrlIfExists(key: string): Promise<string | null> {
+  if (!(await s3ObjectExists(key))) return null;
+  return getPresignedUrl(key);
 }
 
 export async function deletePendingJobVideo(userId: string, jobId: string): Promise<void> {

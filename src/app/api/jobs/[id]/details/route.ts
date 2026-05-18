@@ -16,7 +16,7 @@ export type JobOutputHistoryEntry = {
 
 /**
  * GET /api/jobs/[id]/details
- * Returns preview URLs for a job: reference images (S3), source image (Dropbox), output video(s).
+ * Returns preview URLs for a job: reference images (S3), source thumbnail (S3), output video (S3, Dropbox fallback).
  */
 export async function GET(
   _request: NextRequest,
@@ -74,6 +74,7 @@ export async function GET(
   let outputVideoUrl: string | null = null;
   if (job.status === JOB_STATUS.COMPLETED && job.outputDropboxPath) {
     outputVideoUrl = await resolveJobOutputVideoUrl(job.userId, {
+      jobId: job.id,
       outputDropboxPath: job.outputDropboxPath,
     });
   }
@@ -96,6 +97,7 @@ export async function GET(
 
   for (const archived of archivedOutputs) {
     const url = await resolveJobOutputVideoUrl(job.userId, {
+      jobId: job.id,
       outputVideoS3Key: archived.outputVideoS3Key,
       outputDropboxPath: archived.outputDropboxPath,
     });

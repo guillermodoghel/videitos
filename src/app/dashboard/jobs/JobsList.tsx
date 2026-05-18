@@ -8,7 +8,7 @@ import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 import { getJobWorkflowPhaseLabel } from "@/lib/job-workflow-phase-label";
 import { appendRunwayProgressToLabel } from "@/lib/runway-progress-display";
 import { isActiveJobStatus } from "@/lib/job-live-update";
-import { JobWorkflowProgressGraph } from "./JobWorkflowProgressGraph";
+import { JobActiveStatusDisplay } from "./JobActiveStatusDisplay";
 import { mergeJobLiveUpdates, type JobLiveUpdate } from "@/lib/job-live-update";
 
 type JobRow = {
@@ -316,7 +316,7 @@ function JobDetailsPanel({
           </div>
           {details.referenceImageUrls.length > 0 && (
             <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-              Ref 1, Ref 2 · Last: source image from Dropbox
+              Ref 1, Ref 2 · Source image
             </p>
           )}
         </div>
@@ -389,7 +389,7 @@ function JobDetailsPanel({
                   </>
                 ) : (
                   <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                    Video no disponible (enlace expirado o archivo movido en Dropbox).
+                    Video no disponible (archivo no encontrado en almacenamiento).
                   </p>
                 )}
                 {entry.isCurrent && onRetake && job.status === JOB_STATUS.COMPLETED && (
@@ -430,6 +430,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
   const [, setSyncLabelTick] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const livePollCountRef = useRef(0);
+  const didAutoExpandActiveRef = useRef(false);
   const jobStatusRef = useRef<Record<string, string>>({});
   const jobsRef = useRef(jobs);
   jobsRef.current = jobs;
@@ -521,6 +522,29 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
     const t = setInterval(() => setSyncLabelTick((n) => n + 1), 10_000);
     return () => clearInterval(t);
   }, [lastSyncedAt]);
+
+  // Auto-expand the first active job so pipeline + progress are visible without an extra click.
+  useEffect(() => {
+    if (didAutoExpandActiveRef.current || loading) return;
+    const firstActive = jobs.find((j) => isActiveJobStatus(j.status));
+    if (!firstActive) return;
+    didAutoExpandActiveRef.current = true;
+    setExpandedId(firstActive.id);
+    if (!detailsCache[firstActive.id]) {
+      setDetailsLoading(firstActive.id);
+      fetch(`/api/jobs/${firstActive.id}/details`, { credentials: "include" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: JobDetails | null) => {
+          if (data) {
+            setDetailsCache((c) => ({
+              ...c,
+              [firstActive.id]: { ...data, outputHistory: data.outputHistory ?? [] },
+            }));
+          }
+        })
+        .finally(() => setDetailsLoading(null));
+    }
+  }, [jobs, loading]);
 
   useEffect(() => {
     if (!pollingEnabled || !hasActiveJobs || !tabVisible) return;
@@ -913,7 +937,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                   <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
                     {modelLabel(j.model)}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="min-w-[11rem] px-4 py-3">
                     <span
                       className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors duration-300 ${statusColor(j.status, j.errorMessage, j.workflowPhase, j.runwayProgress, j.runwayPollStatus)}`}
                     >
@@ -922,6 +946,13 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                       )}
                       {statusLabel(j.status, j.errorMessage, j.workflowPhase, j.runwayProgress, j.runwayPollStatus)}
                     </span>
+                    <JobActiveStatusDisplay
+                      status={j.status}
+                      workflowPhase={j.workflowPhase}
+                      errorMessage={j.errorMessage}
+                      runwayProgress={j.runwayProgress}
+                      runwayPollStatus={j.runwayPollStatus}
+                    />
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-zinc-600 dark:text-zinc-400 tabular-nums">
                     {formatDuration(j.createdAt, j.completedAt)}
@@ -986,12 +1017,13 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                   <tr className="border-b border-zinc-100 bg-zinc-50/50 dark:border-zinc-700/50 dark:bg-zinc-800/30">
                     <td colSpan={isAdmin ? 10 : 9} className="overflow-visible px-4 py-4">
                       <div className="space-y-4">
-                        <JobWorkflowProgressGraph
+                        <JobActiveStatusDisplay
                           status={j.status}
                           workflowPhase={j.workflowPhase}
                           errorMessage={j.errorMessage}
                           runwayProgress={j.runwayProgress}
                           runwayPollStatus={j.runwayPollStatus}
+                          compactGraph
                         />
                         {detailsLoading === j.id ? (
                           <p className="text-sm text-zinc-500 dark:text-zinc-400">

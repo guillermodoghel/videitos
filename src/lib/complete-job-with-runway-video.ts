@@ -22,6 +22,10 @@ import {
   uploadPendingJobVideo,
   deletePendingJobVideo,
   pendingJobVideoKey,
+  jobOutputVideoKey,
+  s3ObjectExists,
+  copyS3Object,
+  uploadJobOutputVideo,
 } from "@/lib/s3";
 import { persistRunwayVideoUri } from "@/lib/persist-runway-video-uri";
 import { resolveRunwayVideoUriForJob } from "@/lib/resolve-runway-video-uri";
@@ -439,6 +443,23 @@ export async function completeJobWithRunwayVideo(params: {
         error: err instanceof Error ? err.message : String(err),
       })
     );
+  }
+
+  const outputKey = jobOutputVideoKey(job.userId, job.id);
+  const pendingKey = pendingJobVideoKey(job.userId, job.id);
+  let outputCached = false;
+  if (await s3ObjectExists(pendingKey)) {
+    outputCached = await copyS3Object(pendingKey, outputKey);
+  }
+  if (!outputCached) {
+    outputCached = !!(await uploadJobOutputVideo(job.userId, job.id, videoBuffer));
+  }
+  if (outputCached) {
+    jobLog("complete", "output video cached to S3 for dashboard", {
+      jobId: job.id,
+      outputKey,
+      source,
+    });
   }
 
   await deletePendingJobVideo(job.userId, job.id);
