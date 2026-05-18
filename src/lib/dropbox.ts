@@ -559,6 +559,17 @@ export async function uploadFile(
     };
     console.error("[Dropbox upload] failed", baseLog);
 
+    if (res.status === 429) {
+      const retryAfterSeconds = parseDropboxRetryAfterSeconds(retryAfter);
+      console.error("[Dropbox upload] rate limited — deferring to workflow retry", {
+        ...logContext,
+        requestId,
+        retryAfterSeconds,
+        retryAfter,
+      });
+      throw new DropboxRateLimitError(retryAfterSeconds);
+    }
+
     if (res.status === 401 && options.onUnauthorized && !didForceRefresh) {
       didForceRefresh = true;
       console.error("[Dropbox upload] 401 — attempting access token refresh", {
@@ -612,4 +623,12 @@ export async function uploadFile(
   }
   console.error("[Dropbox upload] giving up (loop exit)", { ...logContext, contentLengthBytes, mode });
   return null;
+}
+
+function parseDropboxRetryAfterSeconds(retryAfter: string | null): number {
+  const seconds = retryAfter ? Number(retryAfter) : NaN;
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return Math.ceil(seconds);
+  }
+  return 60;
 }

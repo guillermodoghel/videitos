@@ -17,6 +17,12 @@ import { CREDIT_KIND } from "@/lib/constants/credit-transaction-kind";
 import { JOB_WORKFLOW_PHASE } from "@/lib/constants/job-workflow-phase";
 import { jobLog, jobLogError } from "@/lib/job-log";
 import { isDropboxRateLimitError } from "@/lib/dropbox-rate-limit";
+import {
+  getObjectBody,
+  uploadPendingJobVideo,
+  deletePendingJobVideo,
+  pendingJobVideoKey,
+} from "@/lib/s3";
 
 export type CompleteJobWithRunwayVideoResult =
   | { outcome: "completed"; outputDropboxPath: string }
@@ -183,30 +189,49 @@ export async function completeJobWithRunwayVideo(params: {
     videoUriHost = null;
   }
 
-  jobLog("complete", "downloading video from Runway", {
-    jobId: job.id,
-    videoUriHost,
-    source,
-  });
-  const downloadStartedAt = Date.now();
-  const videoBuffer = await downloadRunwayVideo(apiKey, videoUri, {
-    logContext: { source, jobId: job.id, userId: job.userId, templateId: job.templateId, videoUriHost },
-  });
-  if (!videoBuffer) {
-    jobLogError("complete", "Runway video download failed", {
+  const pendingKey = pendingJobVideoKey(job.userId, job.id);
+  let videoBuffer = await getObjectBody(pendingKey);
+  if (videoBuffer) {
+    jobLog("complete", "using cached Runway video from S3", {
       jobId: job.id,
-      elapsedMs: Date.now() - downloadStartedAt,
+      pendingKey,
+      bytes: videoBuffer.byteLength,
+      source,
     });
-    await prisma.job.update({
-      where: { id: job.id },
-      data: {
-        status: JOB_STATUS.FAILED,
-        errorMessage: "Failed to download video from Runway",
-        workflowPhase: null,
-        completedAt: new Date(),
-      },
+  } else {
+    jobLog("complete", "downloading video from Runway", {
+      jobId: job.id,
+      videoUriHost,
+      source,
     });
-    return { outcome: "failed", error: "Download failed" };
+    const downloadStartedAt = Date.now();
+    videoBuffer = await downloadRunwayVideo(apiKey, videoUri, {
+      logContext: { source, jobId: job.id, userId: job.userId, templateId: job.templateId, videoUriHost },
+    });
+    if (!videoBuffer) {
+      jobLogError("complete", "Runway video download failed", {
+        jobId: job.id,
+        elapsedMs: Date.now() - downloadStartedAt,
+      });
+      await prisma.job.update({
+        where: { id: job.id },
+        data: {
+          status: JOB_STATUS.FAILED,
+          errorMessage: "Failed to download video from Runway",
+          workflowPhase: null,
+          completedAt: new Date(),
+        },
+      });
+      return { outcome: "failed", error: "Download failed" };
+    }
+    const cachedKey = await uploadPendingJobVideo(job.userId, job.id, videoBuffer);
+    if (cachedKey) {
+      jobLog("complete", "cached Runway video to S3 for upload retries", {
+        jobId: job.id,
+        pendingKey: cachedKey,
+        bytes: videoBuffer.byteLength,
+      });
+    }
   }
 
   const token = await getValidAccessToken(job.userId);
@@ -225,7 +250,7 @@ export async function completeJobWithRunwayVideo(params: {
 
   const rawBaseName = job.dropboxSourceFilePath.split("/").pop()?.replace(/\.[^.]+$/, "") ?? "video";
   const baseName = sanitizeOutputFileBaseName(rawBaseName);
-  const outputFileName = `${baseName}-${Date.now()}.mp4`;
+  const outputFileName = `${baseName}-videitos-${job.id.slice(-8)}.mp4`;
   const outputPath = destPath.endsWith("/") ? `${destPath}${outputFileName}` : `${destPath}/${outputFileName}`;
 
   await prisma.job.update({
@@ -358,6 +383,8 @@ export async function completeJobWithRunwayVideo(params: {
       })
     );
   }
+
+  await deletePendingJobVideo(job.userId, job.id);
 
   jobLog("complete", "job completed", { jobId: job.id, outputDropboxPath: finalPath, source });
   return { outcome: "completed", outputDropboxPath: finalPath };

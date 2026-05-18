@@ -6,6 +6,9 @@ import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 import { jobLog, jobLogError } from "@/lib/job-log";
 import { completeJobWithRunwayVideo } from "@/lib/complete-job-with-runway-video";
 
+/** Must return before Vercel 300s limit; Dropbox 429 defers to workflow (no long sleeps here). */
+export const maxDuration = 120;
+
 /**
  * POST /api/webhook/job
  * Callback when Runway video generation is ready or failed.

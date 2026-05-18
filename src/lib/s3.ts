@@ -2,6 +2,7 @@ import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+  DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
@@ -44,6 +45,43 @@ export function preGenReferenceImageKey(
 /** S3 key format: userId/jobs/jobId/pregen.ext (pre-gen output image for job list) */
 export function preGenOutputImageKey(userId: string, jobId: string, ext: "png" | "jpg"): string {
   return `${userId}/jobs/${jobId}/pregen.${ext}`;
+}
+
+/** Temp Runway video while waiting on Dropbox rate limits (deleted after successful upload). */
+export function pendingJobVideoKey(userId: string, jobId: string): string {
+  return `${userId}/jobs/${jobId}/pending-upload.mp4`;
+}
+
+export async function uploadPendingJobVideo(
+  userId: string,
+  jobId: string,
+  buffer: Buffer
+): Promise<string | null> {
+  const client = getClient();
+  if (!client || !bucket) return null;
+  const key = pendingJobVideoKey(userId, jobId);
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: buffer,
+      ContentType: "video/mp4",
+    })
+  );
+  return key;
+}
+
+export async function deletePendingJobVideo(userId: string, jobId: string): Promise<void> {
+  const client = getClient();
+  if (!client || !bucket) return;
+  await client
+    .send(
+      new DeleteObjectCommand({
+        Bucket: bucket,
+        Key: pendingJobVideoKey(userId, jobId),
+      })
+    )
+    .catch(() => undefined);
 }
 
 export async function uploadReferenceImage(
