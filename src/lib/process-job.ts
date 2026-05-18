@@ -36,10 +36,10 @@ export type ProcessJobOptions = {
 };
 
 /** Queued jobs with a recent claim are mid-start (download / pre-gen) and use a Runway slot. */
-const RUNWAY_CLAIM_MAX_AGE_MS = 15 * 60 * 1000;
+const RUNWAY_ACTIVE_CLAIM_MAX_AGE_MS = 10 * 60 * 1000;
 
 function activeRunwayJobsWhere(opts: { userId?: string; platformKeyOnly?: boolean }) {
-  const claimSince = new Date(Date.now() - RUNWAY_CLAIM_MAX_AGE_MS);
+  const claimSince = new Date(Date.now() - RUNWAY_ACTIVE_CLAIM_MAX_AGE_MS);
   return {
     ...(opts.userId ? { userId: opts.userId } : {}),
     ...(opts.platformKeyOnly ? { user: { runwayApiKey: null } } : {}),
@@ -118,8 +118,6 @@ export async function processJob(
   const userHasKey = !!job.user?.runwayApiKey?.trim();
   const usePlatformKey = usesPlatformKey(job.user?.runwayApiKey ?? null);
 
-  await setJobWorkflowPhase(jobId, JOB_WORKFLOW_PHASE.CLAIMING_SLOT);
-
   if (!skipRateLimit) {
     const limit = getModelRateLimit(modelId);
     const maxConcurrent = limit.maxConcurrent ?? 1;
@@ -184,6 +182,7 @@ export async function processJob(
           }
         );
         claimDone = true;
+        await setJobWorkflowPhase(jobId, JOB_WORKFLOW_PHASE.CLAIMING_SLOT);
         jobLog("process", "rate limit slot claimed", {
           jobId,
           model: modelId,
@@ -198,6 +197,7 @@ export async function processJob(
         const isSerialization =
           e && typeof e === "object" && "code" in e && (e as { code: string }).code === "P2034";
         if (isRateLimit) {
+          await setJobWorkflowPhase(jobId, JOB_WORKFLOW_PHASE.WAITING_RATE_LIMIT);
           jobLog("process", "rate limited — will retry", {
             jobId,
             attempt: attempt + 1,
@@ -215,12 +215,15 @@ export async function processJob(
           continue;
         }
         if (isSerialization) {
+          await setJobWorkflowPhase(jobId, JOB_WORKFLOW_PHASE.WAITING_RATE_LIMIT);
           jobLog("process", "rate limited — serialization retries exhausted", { jobId });
           return { ok: false, error: "rate_limit" };
         }
         throw e;
       }
     }
+  } else {
+    await setJobWorkflowPhase(jobId, JOB_WORKFLOW_PHASE.CLAIMING_SLOT);
   }
 
   const config = parseTemplateConfig(job.template.model, job.template.config);

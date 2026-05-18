@@ -5,6 +5,7 @@ import { getValidAccessToken, getTemporaryLink } from "@/lib/dropbox";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { USER_ROLE } from "@/lib/constants/user-role";
 import { reconcileStuckProcessingJobs } from "@/lib/reconcile-stuck-jobs";
+import { releaseStaleRunwayClaims } from "@/lib/release-stale-runway-claims";
 
 const DEFAULT_PER_PAGE = 10;
 const MIN_PER_PAGE = 5;
@@ -48,11 +49,14 @@ export async function GET(request: NextRequest) {
 
   const activeStatuses = [JOB_STATUS.QUEUED, JOB_STATUS.PROCESSING, JOB_STATUS.SENT_TO_VEO];
 
-  // Heal jobs stuck in processing after Runway finished (workflow/webhook race).
-  void reconcileStuckProcessingJobs({
-    userId: isAdmin ? undefined : userId,
-    limit: 5,
-  }).catch((err) => console.error("[GET /api/jobs] reconcileStuckProcessingJobs:", err));
+  // Heal stuck jobs: release zombie Runway slot claims, finish processing jobs Runway already completed.
+  void Promise.all([
+    releaseStaleRunwayClaims({ userId: isAdmin ? undefined : userId }),
+    reconcileStuckProcessingJobs({
+      userId: isAdmin ? undefined : userId,
+      limit: 5,
+    }),
+  ]).catch((err) => console.error("[GET /api/jobs] background heal:", err));
 
   const [jobs, total, activeCount] = await Promise.all([
     prisma.job.findMany({
