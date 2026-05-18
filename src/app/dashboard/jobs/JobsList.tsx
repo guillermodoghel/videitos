@@ -9,6 +9,7 @@ import { getJobWorkflowPhaseLabel } from "@/lib/job-workflow-phase-label";
 import { appendRunwayProgressToLabel } from "@/lib/runway-progress-display";
 import { isActiveJobStatus } from "@/lib/job-live-update";
 import { JobActiveStatusDisplay } from "./JobActiveStatusDisplay";
+import { JobWorkflowProgressGraph } from "./JobWorkflowProgressGraph";
 import { mergeJobLiveUpdates, type JobLiveUpdate } from "@/lib/job-live-update";
 
 type JobRow = {
@@ -232,6 +233,13 @@ function JobDetailsPanel({
 
   return (
     <div className="space-y-4">
+      <JobWorkflowProgressGraph
+        status={job.status}
+        workflowPhase={job.workflowPhase}
+        errorMessage={job.errorMessage}
+        runwayProgress={job.runwayProgress}
+        runwayPollStatus={job.runwayPollStatus}
+      />
       <div>
         <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           IDs
@@ -1016,32 +1024,16 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                 {expandedId === j.id && (
                   <tr className="border-b border-zinc-100 bg-zinc-50/50 dark:border-zinc-700/50 dark:bg-zinc-800/30">
                     <td colSpan={isAdmin ? 10 : 9} className="overflow-visible px-4 py-4">
-                      <div className="space-y-4">
-                        <JobActiveStatusDisplay
-                          status={j.status}
-                          workflowPhase={j.workflowPhase}
-                          errorMessage={j.errorMessage}
-                          runwayProgress={j.runwayProgress}
-                          runwayPollStatus={j.runwayPollStatus}
-                          compactGraph
-                        />
-                        {detailsLoading === j.id ? (
-                          <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                            Loading previews…
-                          </p>
-                        ) : (
-                          <JobDetailsPanel
-                            job={j}
-                            details={detailsCache[j.id]}
-                            onRetake={
-                              j.status === JOB_STATUS.COMPLETED
-                                ? () => handleRetake(j.id)
-                                : undefined
-                            }
-                            retaking={retakingId === j.id}
-                          />
-                        )}
-                      </div>
+                      <JobDetailsPanel
+                        job={j}
+                        details={detailsCache[j.id]}
+                        onRetake={
+                          j.status === JOB_STATUS.COMPLETED
+                            ? () => handleRetake(j.id)
+                            : undefined
+                        }
+                        retaking={retakingId === j.id}
+                      />
                     </td>
                   </tr>
                 )}
