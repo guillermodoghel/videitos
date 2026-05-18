@@ -56,6 +56,7 @@ export async function POST(
       sentAt: null,
       rateLimitClaimedAt: null,
       outputDropboxPath: null,
+      workflowPhase: null,
       apiCost: null,
       creditCost: null,
     },

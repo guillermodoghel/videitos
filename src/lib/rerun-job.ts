@@ -15,6 +15,7 @@ const ALLOWED_STATUSES: Record<RerunMode, readonly string[]> = {
 const BASE_RESET = {
   status: JOB_STATUS.QUEUED,
   errorMessage: null,
+  workflowPhase: null,
   completedAt: null,
   providerOperationId: null,
   sentAt: null,

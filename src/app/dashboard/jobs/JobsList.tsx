@@ -4,6 +4,7 @@ import { Fragment, useEffect, useState } from "react";
 import { VIDEO_MODELS } from "@/lib/video-models";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
+import { getJobWorkflowPhaseLabel } from "@/lib/job-workflow-phase-label";
 
 type JobRow = {
   id: string;
@@ -18,6 +19,7 @@ type JobRow = {
   outputDropboxPath: string | null;
   preGenImageKey: string | null;
   errorMessage: string | null;
+  workflowPhase: string | null;
   apiCost: number | null;
   creditCost: number | null;
   createdAt: string;
@@ -47,16 +49,14 @@ function formatDuration(createdAt: string, completedAt: string | null): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function statusLabel(status: string, errorMessage: string | null | undefined): string {
+function statusLabel(
+  status: string,
+  errorMessage: string | null | undefined,
+  workflowPhase: string | null | undefined
+): string {
+  const phaseLabel = getJobWorkflowPhaseLabel(status, workflowPhase);
+  if (phaseLabel) return phaseLabel;
   if (status === JOB_STATUS.FAILED && errorMessage === JOB_ERROR.CANCELED) return "Canceled";
-  if (
-    status === JOB_STATUS.QUEUED &&
-    errorMessage != null &&
-    (errorMessage === JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS ||
-      errorMessage === JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS_CODE)
-  ) {
-    return "Waiting for Runway credits";
-  }
   const labels: Record<string, string> = {
     [JOB_STATUS.QUEUED]: "Queued",
     [JOB_STATUS.PROCESSING]: "Processing",
@@ -67,14 +67,13 @@ function statusLabel(status: string, errorMessage: string | null | undefined): s
   return labels[status] ?? status;
 }
 
-function statusColor(status: string, errorMessage: string | null | undefined): string {
-  if (
-    status === JOB_STATUS.QUEUED &&
-    errorMessage != null &&
-    (errorMessage === JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS ||
-      errorMessage === JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS_CODE)
-  ) {
-    return "bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-300";
+function statusColor(
+  status: string,
+  errorMessage: string | null | undefined,
+  workflowPhase: string | null | undefined
+): string {
+  if (getJobWorkflowPhaseLabel(status, workflowPhase)) {
+    return "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300";
   }
   if (status === JOB_STATUS.FAILED && errorMessage === JOB_ERROR.CANCELED)
     return "bg-zinc-100 text-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-300";
@@ -725,12 +724,12 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                   </td>
                   <td className="px-4 py-3">
                     <span
-                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${statusColor(j.status, j.errorMessage)}`}
+                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${statusColor(j.status, j.errorMessage, j.workflowPhase)}`}
                     >
                       {(j.status === JOB_STATUS.QUEUED || j.status === JOB_STATUS.PROCESSING || j.status === JOB_STATUS.SENT_TO_VEO) && (
                         <StatusSpinner />
                       )}
-                      {statusLabel(j.status, j.errorMessage)}
+                      {statusLabel(j.status, j.errorMessage, j.workflowPhase)}
                     </span>
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-zinc-600 dark:text-zinc-400 tabular-nums">

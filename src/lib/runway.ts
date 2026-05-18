@@ -120,18 +120,35 @@ export async function getRunwayTaskStatus(
 
   const status = (data.status ?? "").toUpperCase();
   if (status === "SUCCEEDED") {
-    const url = Array.isArray(data.output) && data.output.length > 0 ? data.output[0] : undefined;
-    if (url && typeof url === "string") {
+    const url = extractRunwayOutputUrl(data.output);
+    if (url) {
       return { done: true, videoUri: url };
     }
     return { done: true, error: "No output URL in Runway response" };
   }
-  if (status === "FAILED" || status === "CANCELLED") {
+  if (status === "FAILED" || status === "CANCELLED" || status === "CANCELED") {
     const raw = typeof data.error === "string" ? data.error : "Task failed";
     return { done: true, error: classifyRunwayTaskError(raw) };
   }
 
   return { done: false };
+}
+
+/** Runway may return output as string URLs or objects with url/uri. */
+function extractRunwayOutputUrl(output: unknown): string | undefined {
+  if (typeof output === "string" && output.startsWith("http")) {
+    return output;
+  }
+  if (!Array.isArray(output)) return undefined;
+  for (const item of output) {
+    if (typeof item === "string" && item.startsWith("http")) return item;
+    if (item && typeof item === "object") {
+      const record = item as Record<string, unknown>;
+      if (typeof record.url === "string" && record.url.startsWith("http")) return record.url;
+      if (typeof record.uri === "string" && record.uri.startsWith("http")) return record.uri;
+    }
+  }
+  return undefined;
 }
 
 /**

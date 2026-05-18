@@ -23,6 +23,8 @@ import { JOB_STATUS } from "@/lib/constants/job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 import { jobLog, jobLogError } from "@/lib/job-log";
 import { isRunwayInsufficientCreditsError } from "@/lib/runway-errors";
+import { JOB_WORKFLOW_PHASE } from "@/lib/constants/job-workflow-phase";
+import { setJobWorkflowPhase } from "@/lib/set-job-workflow-phase";
 
 export type ProcessJobResult =
   | { ok: true; operationName: string }
@@ -115,6 +117,8 @@ export async function processJob(
 
   const userHasKey = !!job.user?.runwayApiKey?.trim();
   const usePlatformKey = usesPlatformKey(job.user?.runwayApiKey ?? null);
+
+  await setJobWorkflowPhase(jobId, JOB_WORKFLOW_PHASE.CLAIMING_SLOT);
 
   if (!skipRateLimit) {
     const limit = getModelRateLimit(modelId);
@@ -228,7 +232,12 @@ export async function processJob(
       console.log("[process-job] jobId=%s → No Runway API key (user has none and no platform key)", jobId);
       await prisma.job.update({
         where: { id: job.id },
-        data: { status: JOB_STATUS.FAILED, errorMessage: JOB_ERROR.NO_RUNWAY_API_KEY, completedAt: new Date() },
+        data: {
+          status: JOB_STATUS.FAILED,
+          errorMessage: JOB_ERROR.NO_RUNWAY_API_KEY,
+          workflowPhase: null,
+          completedAt: new Date(),
+        },
       });
       return { ok: false, error: "No API key" };
     }
@@ -252,6 +261,7 @@ export async function processJob(
           data: {
             status: JOB_STATUS.FAILED,
             errorMessage: JOB_ERROR.INSUFFICIENT_CREDITS,
+            workflowPhase: null,
             completedAt: new Date(),
             rateLimitClaimedAt: null,
           },
@@ -270,7 +280,12 @@ export async function processJob(
       console.log("[process-job] jobId=%s → Dropbox not connected", jobId);
       await prisma.job.update({
         where: { id: job.id },
-        data: { status: JOB_STATUS.FAILED, errorMessage: JOB_ERROR.DROPBOX_NOT_CONNECTED, completedAt: new Date() },
+        data: {
+          status: JOB_STATUS.FAILED,
+          errorMessage: JOB_ERROR.DROPBOX_NOT_CONNECTED,
+          workflowPhase: null,
+          completedAt: new Date(),
+        },
       });
       return { ok: false, error: "Dropbox not connected" };
     }
@@ -280,6 +295,8 @@ export async function processJob(
         getValidAccessTokenWithOptions(job.userId, { forceRefresh: true }),
       logContext: { source: "process-job", jobId },
     };
+
+    await setJobWorkflowPhase(jobId, JOB_WORKFLOW_PHASE.PREPARING);
 
     let promptImage: string;
 
@@ -316,7 +333,12 @@ export async function processJob(
         console.log("[process-job] jobId=%s → Pre-gen: no valid reference images", jobId);
         await prisma.job.update({
           where: { id: job.id },
-          data: { status: JOB_STATUS.FAILED, errorMessage: "Pre-generation: no valid reference images", completedAt: new Date() },
+          data: {
+            status: JOB_STATUS.FAILED,
+            errorMessage: "Pre-generation: no valid reference images",
+            workflowPhase: null,
+            completedAt: new Date(),
+          },
         });
         return { ok: false, error: "Pre-gen refs missing" };
       }
@@ -369,7 +391,12 @@ export async function processJob(
         jobLogError("process", "source image download failed", { jobId, sourcePathOrId });
         await prisma.job.update({
           where: { id: job.id },
-            data: { status: JOB_STATUS.FAILED, errorMessage: "Failed to download source image from Dropbox", completedAt: new Date() },
+            data: {
+              status: JOB_STATUS.FAILED,
+              errorMessage: "Failed to download source image from Dropbox",
+              workflowPhase: null,
+              completedAt: new Date(),
+            },
         });
         return { ok: false, error: "Failed to download source image" };
       }
@@ -379,6 +406,7 @@ export async function processJob(
       promptImage = `data:${newMime};base64,${newImageBuf.toString("base64")}`;
     }
     const ratio = config.runwayRatio ?? aspectRatioToRunwayRatio(config.aspectRatio);
+    await setJobWorkflowPhase(jobId, JOB_WORKFLOW_PHASE.SUBMITTING);
     jobLog("process", "submitting to Runway image-to-video", {
       jobId,
       model: modelId,
@@ -404,6 +432,7 @@ export async function processJob(
         providerOperationId: result.taskId,
         sentAt: new Date(),
         errorMessage: null,
+        workflowPhase: JOB_WORKFLOW_PHASE.GENERATING,
       },
     });
     jobLog("process", "submitted to Runway — now processing", {
@@ -418,7 +447,12 @@ export async function processJob(
   console.log("[process-job] jobId=%s → Unsupported model: %s", jobId, modelId);
   await prisma.job.update({
     where: { id: job.id },
-    data: { status: JOB_STATUS.FAILED, errorMessage: JOB_ERROR.UNSUPPORTED_MODEL, completedAt: new Date() },
+    data: {
+      status: JOB_STATUS.FAILED,
+      errorMessage: JOB_ERROR.UNSUPPORTED_MODEL,
+      workflowPhase: null,
+      completedAt: new Date(),
+    },
   });
   return { ok: false, error: "Unsupported model" };
 }
@@ -447,6 +481,7 @@ async function handleRunwayStepError(
       data: {
         status: JOB_STATUS.QUEUED,
         errorMessage: JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS,
+        workflowPhase: JOB_WORKFLOW_PHASE.WAITING_RUNWAY_CREDITS,
         completedAt: null,
         providerOperationId: null,
         sentAt: null,
@@ -462,6 +497,7 @@ async function handleRunwayStepError(
     data: {
       status: JOB_STATUS.FAILED,
       errorMessage: displayError,
+      workflowPhase: null,
       completedAt: new Date(),
     },
   });
@@ -475,6 +511,7 @@ export async function resetJobForRunwayCreditsRetry(jobId: string): Promise<void
     data: {
       status: JOB_STATUS.QUEUED,
       errorMessage: JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS,
+      workflowPhase: JOB_WORKFLOW_PHASE.WAITING_RUNWAY_CREDITS,
       completedAt: null,
       providerOperationId: null,
       sentAt: null,
@@ -491,6 +528,7 @@ export async function markJobFailedRunwayInsufficientCredits(jobId: string): Pro
     data: {
       status: JOB_STATUS.FAILED,
       errorMessage: JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS,
+      workflowPhase: null,
       completedAt: new Date(),
       rateLimitClaimedAt: null,
     },
