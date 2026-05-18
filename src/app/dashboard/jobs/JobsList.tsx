@@ -13,6 +13,7 @@ type JobRow = {
   templateName: string;
   model: string;
   dropboxSourceFilePath: string;
+  sourceThumbnailUrl: string | null;
   outputDropboxPath: string | null;
   preGenImageKey: string | null;
   errorMessage: string | null;
@@ -96,6 +97,46 @@ function StatusSpinner() {
 function modelLabel(modelId: string): string {
   const m = VIDEO_MODELS.find((x) => x.id === modelId);
   return m?.name ?? modelId;
+}
+
+function sourceFileLabel(path: string): string {
+  return path.split("/").pop() ?? path;
+}
+
+function JobSourceThumbnail({
+  url,
+  sourcePath,
+}: {
+  url: string | null;
+  sourcePath: string;
+}) {
+  const label = sourceFileLabel(sourcePath);
+  if (!url) {
+    return (
+      <span
+        className="flex h-10 w-10 shrink-0 items-center justify-center rounded border border-zinc-200 bg-zinc-100 text-[10px] text-zinc-400 dark:border-zinc-600 dark:bg-zinc-800"
+        title={label}
+      >
+        —
+      </span>
+    );
+  }
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={label}
+      className="block shrink-0 overflow-hidden rounded border border-zinc-200 dark:border-zinc-600"
+    >
+      <img
+        src={url}
+        alt={label}
+        className="h-10 w-10 object-cover"
+        loading="lazy"
+      />
+    </a>
+  );
 }
 
 function JobDetailsPanel({
@@ -561,6 +602,9 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
             <tr className="border-b border-zinc-200 bg-zinc-50/80 dark:border-zinc-700 dark:bg-zinc-800/80">
               <th className="w-8 px-2 py-3" aria-label="Select for delete" />
               <th className="w-10 px-2 py-3" aria-label="Expand" />
+              <th className="w-14 px-2 py-3 font-medium text-zinc-700 dark:text-zinc-300">
+                Input
+              </th>
               {isAdmin && (
                 <th className="px-4 py-3 font-medium text-zinc-700 dark:text-zinc-300">
                   User
@@ -589,7 +633,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
           <tbody>
             {jobs.length === 0 ? (
               <tr>
-                <td colSpan={isAdmin ? 9 : 8} className="px-4 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
+                <td colSpan={isAdmin ? 10 : 9} className="px-4 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
                   No jobs match the current filters.
                 </td>
               </tr>
@@ -627,6 +671,12 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                       </svg>
                     </button>
+                  </td>
+                  <td className="px-2 py-3">
+                    <JobSourceThumbnail
+                      url={j.sourceThumbnailUrl}
+                      sourcePath={j.dropboxSourceFilePath}
+                    />
                   </td>
                   {isAdmin && (
                     <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
@@ -699,7 +749,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                 </tr>
                 {expandedId === j.id && (
                   <tr className="border-b border-zinc-100 bg-zinc-50/50 dark:border-zinc-700/50 dark:bg-zinc-800/30">
-                    <td colSpan={isAdmin ? 9 : 8} className="px-4 py-4">
+                    <td colSpan={isAdmin ? 10 : 9} className="px-4 py-4">
                       {detailsLoading === j.id ? (
                         <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading details…</p>
                       ) : (

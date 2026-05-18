@@ -12,6 +12,7 @@ type TemplateRow = {
   enabled: boolean;
   createdAt: Date | string;
   creditsPerVideo: number;
+  completedVideosCount: number;
 };
 
 export function TemplateList({ templates }: { templates: TemplateRow[] }) {
@@ -77,9 +78,13 @@ export function TemplateList({ templates }: { templates: TemplateRow[] }) {
             >
               {t.name}
             </Link>
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
-              {t.modelLabel}
-              <span className="ml-2 rounded bg-zinc-200 px-1.5 py-0.5 text-xs font-medium text-zinc-700 dark:bg-zinc-600 dark:text-zinc-300">
+            <p className="flex flex-wrap items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
+              <span>{t.modelLabel}</span>
+              <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
+                {t.completedVideosCount}{" "}
+                {t.completedVideosCount === 1 ? "video generado" : "videos generados"}
+              </span>
+              <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-xs font-medium text-zinc-700 dark:bg-zinc-600 dark:text-zinc-300">
                 ~{t.creditsPerVideo.toFixed(1)} credits/video
               </span>
             </p>

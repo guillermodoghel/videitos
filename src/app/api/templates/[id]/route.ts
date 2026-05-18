@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUserId } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { JOB_STATUS } from "@/lib/constants/job-status";
 import { parseTemplateConfig, isRunwayImageToVideoModel } from "@/lib/video-models";
 import { uploadReferenceImage, uploadPreGenReferenceImage } from "@/lib/s3";
 import { normalizeDropboxPath } from "@/lib/dropbox-path";
@@ -82,6 +83,13 @@ export async function GET(
   const { id } = await params;
   const template = await prisma.template.findFirst({
     where: { id, userId },
+    include: {
+      _count: {
+        select: {
+          jobs: { where: { status: JOB_STATUS.COMPLETED } },
+        },
+      },
+    },
   });
   if (!template) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -95,6 +103,7 @@ export async function GET(
     config: parseTemplateConfig(template.model, template.config as object),
     dropboxSourcePath: template.dropboxSourcePath,
     dropboxDestinationPath: template.dropboxDestinationPath,
+    completedVideosCount: template._count.jobs,
     createdAt: template.createdAt.toISOString(),
     updatedAt: template.updatedAt.toISOString(),
   });

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUserId } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { JOB_STATUS } from "@/lib/constants/job-status";
 import { parseTemplateConfig } from "@/lib/video-models";
 import { uploadReferenceImage, uploadPreGenReferenceImage } from "@/lib/s3";
 
@@ -75,6 +76,13 @@ export async function GET() {
   const templates = await prisma.template.findMany({
     where: { userId },
     orderBy: { createdAt: "desc" },
+    include: {
+      _count: {
+        select: {
+          jobs: { where: { status: JOB_STATUS.COMPLETED } },
+        },
+      },
+    },
   });
 
   return NextResponse.json({
@@ -86,6 +94,7 @@ export async function GET() {
       config: parseTemplateConfig(t.model, t.config as object),
       dropboxSourcePath: t.dropboxSourcePath,
       dropboxDestinationPath: t.dropboxDestinationPath,
+      completedVideosCount: t._count.jobs,
       createdAt: t.createdAt.toISOString(),
       updatedAt: t.updatedAt.toISOString(),
     })),

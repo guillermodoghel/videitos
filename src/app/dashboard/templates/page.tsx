@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getSessionUserId } from "@/lib/auth";
+import { JOB_STATUS } from "@/lib/constants/job-status";
 import { getModelById } from "@/lib/video-models";
 import { getTemplateEstimatedCredits } from "@/lib/credits";
 import { TemplateList } from "./TemplateList";
@@ -12,12 +13,20 @@ export default async function TemplatesPage() {
   const templates = await prisma.template.findMany({
     where: { userId },
     orderBy: { createdAt: "desc" },
+    include: {
+      _count: {
+        select: {
+          jobs: { where: { status: JOB_STATUS.COMPLETED } },
+        },
+      },
+    },
   });
 
   const templatesWithModelName = templates.map((t) => ({
     ...t,
     modelLabel: getModelById(t.model)?.name ?? t.model,
     creditsPerVideo: getTemplateEstimatedCredits(t.model, t.config),
+    completedVideosCount: t._count.jobs,
   }));
 
   return (
