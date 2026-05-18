@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { archiveJobOutputHistory } from "@/lib/archive-job-output-history";
 import { startJobWorkflow } from "@/lib/start-job-workflow";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { jobLog, jobLogError } from "@/lib/job-log";
@@ -63,6 +64,17 @@ export async function rerunJob(jobId: string, mode: RerunMode): Promise<RerunJob
       error: `Job cannot be ${verb} (status: ${job.status})`,
       status: 400,
     };
+  }
+
+  if (mode === "retake") {
+    try {
+      await archiveJobOutputHistory(jobId);
+    } catch (err) {
+      jobLogError("rerun", "archive output history failed (continuing retake)", {
+        jobId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   await prisma.job.update({

@@ -1,5 +1,7 @@
 # From Vibecoding to Revenue: Building an AI B2B SaaS
 
+> **Developer docs:** setup and architecture live in [README.md](../README.md) and [architecture.md](architecture.md).
+
 I just vibecoded an AI B2B SaaS that is generating revenue.
 
 A friend contacted me. He runs a photobooth company for corporate events and wanted to add animated avatars to his experience.  

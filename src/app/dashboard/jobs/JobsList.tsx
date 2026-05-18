@@ -1,12 +1,17 @@
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { VIDEO_MODELS } from "@/lib/video-models";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 import { getJobWorkflowPhaseLabel } from "@/lib/job-workflow-phase-label";
 import { JobWorkflowProgressGraph } from "./JobWorkflowProgressGraph";
+import {
+  isActiveJobStatus,
+  mergeJobLiveUpdates,
+  type JobLiveUpdate,
+} from "@/lib/job-live-update";
 
 type JobRow = {
   id: string;
@@ -32,13 +37,24 @@ type JobRow = {
   completedAt: string | null;
 };
 
+type JobOutputHistoryEntry = {
+  version: number;
+  isCurrent: boolean;
+  completedAt: string;
+  creditCost: number | null;
+  outputVideoUrl: string | null;
+};
+
 type JobDetails = {
   referenceImageUrls: string[];
   preGenImageUrl: string | null;
   outputVideoUrl: string | null;
+  outputHistory: JobOutputHistoryEntry[];
 };
 
-const POLL_INTERVAL_MS = 5000;
+const LIST_POLL_MS = 10_000;
+const EXPANDED_POLL_MS = 5_000;
+const FULL_SYNC_EVERY_LIVE_POLLS = 6;
 const DEFAULT_PER_PAGE = 10;
 const PER_PAGE_OPTIONS = [10, 20, 50, 100];
 
@@ -125,6 +141,22 @@ function sourceFileLabel(path: string): string {
   return path.split("/").pop() ?? path;
 }
 
+function formatHistoryDate(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
+function formatSyncedAgo(ts: number | null): string | null {
+  if (ts == null) return null;
+  const secs = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (secs < 8) return "just now";
+  if (secs < 60) return `${secs}s ago`;
+  const m = Math.floor(secs / 60);
+  return `${m}m ago`;
+}
+
 function JobSourceThumbnail({
   thumbnailUrl,
   sourcePath,
@@ -183,7 +215,11 @@ function JobDetailsPanel({
     details &&
     (details.referenceImageUrls.length > 0 || job.dropboxSourceFilePath.length > 0);
   const hasPreGen = details?.preGenImageUrl;
-  const hasOutput = job.status === JOB_STATUS.COMPLETED && details?.outputVideoUrl;
+  const outputHistory = details?.outputHistory ?? [];
+  const hasOutputHistory = outputHistory.length > 0;
+  const isRegenerating =
+    hasOutputHistory &&
+    isActiveJobStatus(job.status);
 
   return (
     <div className="space-y-4">
@@ -302,41 +338,74 @@ function JobDetailsPanel({
           </a>
         </div>
       )}
-      {hasOutput && details.outputVideoUrl && (
+      {hasOutputHistory && (
         <div>
           <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-            Result video
+            {outputHistory.length > 1 ? "Historial de videos" : "Result video"}
           </h4>
-          <div className="max-w-lg">
-            <video
-              src={details.outputVideoUrl}
-              controls
-              className="w-full rounded-lg border border-zinc-200 dark:border-zinc-600"
-            >
-              Your browser does not support the video tag.
-            </video>
-            <a
-              href={details.outputVideoUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-1 inline-block text-xs text-zinc-600 hover:underline dark:text-zinc-400"
-            >
-              Open in new tab
-            </a>
-            {onRetake && (
-              <button
-                type="button"
-                onClick={onRetake}
-                disabled={retaking}
-                className="mt-3 rounded border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+          {isRegenerating && (
+            <p className="mb-3 text-sm text-sky-700 dark:text-sky-300">
+              Generando una nueva versión… Los videos anteriores se conservan abajo.
+            </p>
+          )}
+          <div className="space-y-4">
+            {outputHistory.map((entry) => (
+              <div
+                key={`${entry.version}-${entry.isCurrent ? "current" : "archived"}`}
+                className={`max-w-lg rounded-lg border p-3 ${
+                  entry.isCurrent
+                    ? "border-emerald-200 bg-emerald-50/50 dark:border-emerald-900/50 dark:bg-emerald-950/20"
+                    : "border-zinc-200 bg-white dark:border-zinc-600 dark:bg-zinc-900/40"
+                }`}
               >
-                {retaking ? "Retake…" : "Retake — regenerar con la misma foto"}
-              </button>
-            )}
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">
+                    {entry.isCurrent ? "Video actual" : `Versión ${entry.version}`}
+                  </span>
+                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                    {formatHistoryDate(entry.completedAt)}
+                    {entry.creditCost != null ? ` · ${entry.creditCost.toFixed(2)} credits` : ""}
+                  </span>
+                </div>
+                {entry.outputVideoUrl ? (
+                  <>
+                    <video
+                      src={entry.outputVideoUrl}
+                      controls
+                      className="w-full rounded-lg border border-zinc-200 dark:border-zinc-600"
+                    >
+                      Your browser does not support the video tag.
+                    </video>
+                    <a
+                      href={entry.outputVideoUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-1 inline-block text-xs text-zinc-600 hover:underline dark:text-zinc-400"
+                    >
+                      Abrir en nueva pestaña
+                    </a>
+                  </>
+                ) : (
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                    Video no disponible (enlace expirado o archivo movido en Dropbox).
+                  </p>
+                )}
+                {entry.isCurrent && onRetake && job.status === JOB_STATUS.COMPLETED && (
+                  <button
+                    type="button"
+                    onClick={onRetake}
+                    disabled={retaking}
+                    className="mt-3 rounded border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                  >
+                    {retaking ? "Retake…" : "Retake — regenerar con la misma foto"}
+                  </button>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}
-      {details && !hasInputs && !hasPreGen && !hasOutput && (
+      {details && !hasInputs && !hasPreGen && !hasOutputHistory && (
         <p className="text-sm text-zinc-500 dark:text-zinc-400">No previews available.</p>
       )}
     </div>
@@ -354,7 +423,14 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
   const [filterUser, setFilterUser] = useState("");
   const [loading, setLoading] = useState(true);
   const [pollingEnabled, setPollingEnabled] = useState(true);
+  const [tabVisible, setTabVisible] = useState(true);
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  const [, setSyncLabelTick] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const livePollCountRef = useRef(0);
+  const jobStatusRef = useRef<Record<string, string>>({});
+  const jobsRef = useRef(jobs);
+  jobsRef.current = jobs;
   const [detailsCache, setDetailsCache] = useState<Record<string, JobDetails>>({});
   const [detailsLoading, setDetailsLoading] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
@@ -372,36 +448,93 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
     if (totalPages > 0 && page > totalPages) setPage(totalPages);
   }, [totalPages, page]);
 
-  async function fetchJobs() {
+  const fetchJobsFull = useCallback(async (opts?: { silent?: boolean }) => {
     try {
       const params = new URLSearchParams({ page: String(page), perPage: String(perPage) });
       if (filterModel) params.set("model", filterModel);
       if (filterStatus) params.set("status", filterStatus);
       if (isAdmin && filterUser.trim()) params.set("user", filterUser.trim());
-      const res = await fetch(`/api/jobs?${params}`);
+      const res = await fetch(`/api/jobs?${params}`, { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         setJobs(data.jobs ?? []);
         setTotal(data.total ?? 0);
         setHasActiveJobs(data.hasActiveJobs === true);
+        setLastSyncedAt(Date.now());
+        livePollCountRef.current = 0;
       }
     } catch {
       // keep previous state
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
-  }
-
-  useEffect(() => {
-    fetchJobs();
   }, [page, perPage, filterModel, filterStatus, filterUser, isAdmin]);
 
-  // Poll only when user wants it and backend says there are active jobs (queued/processing)
+  const pollLiveJobs = useCallback(async () => {
+    const activeIds = jobsRef.current
+      .filter((j) => isActiveJobStatus(j.status))
+      .map((j) => j.id);
+    if (activeIds.length === 0) {
+      livePollCountRef.current += 1;
+      if (livePollCountRef.current >= FULL_SYNC_EVERY_LIVE_POLLS) {
+        await fetchJobsFull({ silent: true });
+      }
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/jobs/live?ids=${activeIds.join(",")}`, {
+        credentials: "include",
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as { jobs?: JobLiveUpdate[]; hasActiveJobs?: boolean };
+      if (typeof data.hasActiveJobs === "boolean") setHasActiveJobs(data.hasActiveJobs);
+      const updates = data.jobs ?? [];
+      setJobs((prev) => mergeJobLiveUpdates(prev, updates) ?? prev);
+      setLastSyncedAt(Date.now());
+
+      livePollCountRef.current += 1;
+      if (livePollCountRef.current >= FULL_SYNC_EVERY_LIVE_POLLS) {
+        livePollCountRef.current = 0;
+        await fetchJobsFull({ silent: true });
+      }
+    } catch {
+      // keep previous state
+    }
+  }, [fetchJobsFull]);
+
   useEffect(() => {
-    if (!pollingEnabled || !hasActiveJobs) return;
-    const t = setInterval(fetchJobs, POLL_INTERVAL_MS);
+    setLoading(true);
+    fetchJobsFull();
+  }, [fetchJobsFull]);
+
+  useEffect(() => {
+    const onVisibility = () => setTabVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
+  useEffect(() => {
+    if (lastSyncedAt == null) return;
+    const t = setInterval(() => setSyncLabelTick((n) => n + 1), 10_000);
     return () => clearInterval(t);
-  }, [pollingEnabled, hasActiveJobs, page, perPage, filterModel, filterStatus, filterUser, isAdmin]);
+  }, [lastSyncedAt]);
+
+  useEffect(() => {
+    if (!pollingEnabled || !hasActiveJobs || !tabVisible) return;
+
+    const expandedActive =
+      expandedId != null &&
+      jobsRef.current.some((j) => j.id === expandedId && isActiveJobStatus(j.status));
+    const intervalMs = expandedActive ? EXPANDED_POLL_MS : LIST_POLL_MS;
+
+    const tick = () => {
+      void pollLiveJobs();
+    };
+    tick();
+    const t = setInterval(tick, intervalMs);
+    return () => clearInterval(t);
+  }, [pollingEnabled, hasActiveJobs, tabVisible, expandedId, pollLiveJobs]);
 
   const failedOnPage = jobs.filter((j) => j.status === JOB_STATUS.FAILED);
   const allFailedSelected = failedOnPage.length > 0 && failedOnPage.every((j) => selectedForDelete.has(j.id));
@@ -440,7 +573,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
       const data = await res.json().catch(() => ({}));
       if (res.ok && typeof data.deleted === "number") {
         setSelectedForDelete(new Set());
-        await fetchJobs();
+        await fetchJobsFull();
       }
     } finally {
       setDeleting(false);
@@ -457,7 +590,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
           delete next[jobId];
           return next;
         });
-        await fetchJobs();
+        await fetchJobsFull();
       } else {
         const data = await res.json().catch(() => ({}));
         alert(data.error ?? "Retry failed");
@@ -482,7 +615,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
           delete next[jobId];
           return next;
         });
-        await fetchJobs();
+        await fetchJobsFull();
       } else {
         const data = await res.json().catch(() => ({}));
         alert(data.error ?? "Retake failed");
@@ -506,7 +639,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
         alert(data.error ?? "Retry upload failed");
         return;
       }
-      await fetchJobs();
+      await fetchJobsFull();
     } catch {
       alert("Retry upload failed");
     } finally {
@@ -522,7 +655,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
         credentials: "include",
       });
       if (res.ok) {
-        await fetchJobs();
+        await fetchJobsFull();
       } else {
         const data = await res.json().catch(() => ({}));
         alert(data.error ?? "Cancel failed");
@@ -534,19 +667,27 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
     }
   }
 
-  // When a job that is expanded or was expanded (in cache) becomes completed, refetch its details to load the output video
+  // When a job transitions to completed while expanded, load output video once.
   useEffect(() => {
-    jobs.forEach((j) => {
-      if (j.status !== JOB_STATUS.COMPLETED) return;
-      const isRelevant = expandedId === j.id || detailsCache[j.id];
-      if (!isRelevant) return;
-      if (detailsCache[j.id]?.outputVideoUrl) return;
+    for (const j of jobs) {
+      const prev = jobStatusRef.current[j.id];
+      jobStatusRef.current[j.id] = j.status;
+      if (j.status !== JOB_STATUS.COMPLETED || prev === JOB_STATUS.COMPLETED) continue;
+      if (expandedId !== j.id && !detailsCache[j.id]) continue;
+      const cached = detailsCache[j.id];
+      if (cached?.outputVideoUrl) continue;
+      if (cached?.outputHistory?.some((e) => e.isCurrent && e.outputVideoUrl)) continue;
       fetch(`/api/jobs/${j.id}/details`, { credentials: "include" })
         .then((r) => (r.ok ? r.json() : null))
         .then((data: JobDetails | null) => {
-          if (data) setDetailsCache((c) => ({ ...c, [j.id]: data }));
+          if (data) {
+            setDetailsCache((c) => ({
+              ...c,
+              [j.id]: { ...data, outputHistory: data.outputHistory ?? [] },
+            }));
+          }
         });
-    });
+    }
   }, [jobs, expandedId, detailsCache]);
 
   function toggleExpand(jobId: string) {
@@ -560,7 +701,12 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
     fetch(`/api/jobs/${jobId}/details`, { credentials: "include" })
       .then((r) => (r.ok ? r.json() : null))
       .then((data: JobDetails | null) => {
-        if (data) setDetailsCache((c) => ({ ...c, [jobId]: data }));
+        if (data) {
+          setDetailsCache((c) => ({
+            ...c,
+            [jobId]: { ...data, outputHistory: data.outputHistory ?? [] },
+          }));
+        }
       })
       .finally(() => setDetailsLoading(null));
   }
@@ -767,7 +913,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                   </td>
                   <td className="px-4 py-3">
                     <span
-                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${statusColor(j.status, j.errorMessage, j.workflowPhase, j.runwayProgress)}`}
+                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors duration-300 ${statusColor(j.status, j.errorMessage, j.workflowPhase, j.runwayProgress)}`}
                     >
                       {(j.status === JOB_STATUS.QUEUED || j.status === JOB_STATUS.PROCESSING || j.status === JOB_STATUS.SENT_TO_VEO) && (
                         <StatusSpinner />
@@ -907,20 +1053,36 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
               ))}
             </select>
           </label>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            {pollingEnabled && hasActiveJobs
-              ? "Auto-refreshing every 5s."
-              : !pollingEnabled
-                ? "Auto-refresh paused."
-                : "No active jobs; refresh paused."}
-          </p>
+          {pollingEnabled && hasActiveJobs && tabVisible && (
+            <span className="inline-flex items-center gap-1.5 text-xs text-sky-600 dark:text-sky-400">
+              <span className="relative flex h-2 w-2" aria-hidden>
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-60" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-sky-500 dark:bg-sky-400" />
+              </span>
+              Live
+              {formatSyncedAgo(lastSyncedAt) ? ` · ${formatSyncedAgo(lastSyncedAt)}` : ""}
+            </span>
+          )}
+          {!tabVisible && pollingEnabled && hasActiveJobs && (
+            <span className="text-xs text-zinc-500 dark:text-zinc-400">Paused (tab hidden)</span>
+          )}
+          <button
+            type="button"
+            onClick={() => void fetchJobsFull({ silent: true })}
+            className="rounded border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+          >
+            Refresh
+          </button>
           <button
             type="button"
             onClick={() => setPollingEnabled((p) => !p)}
             className="text-xs font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
           >
-            {pollingEnabled ? "Pause auto-refresh" : "Resume auto-refresh"}
+            {pollingEnabled ? "Pause live updates" : "Resume live updates"}
           </button>
+          {!hasActiveJobs && (
+            <span className="text-xs text-zinc-500 dark:text-zinc-400">No active jobs</span>
+          )}
         </div>
       </div>
     </div>

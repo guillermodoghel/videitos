@@ -99,6 +99,32 @@ export function pendingJobVideoKey(userId: string, jobId: string): string {
   return `${userId}/jobs/${jobId}/pending-upload.mp4`;
 }
 
+/** Permanent archived output after retake (version 1, 2, …). */
+export function jobOutputHistoryKey(userId: string, jobId: string, version: number): string {
+  return `${userId}/jobs/${jobId}/outputs/v${version}.mp4`;
+}
+
+export async function uploadJobOutputHistoryVideo(
+  userId: string,
+  jobId: string,
+  version: number,
+  buffer: Buffer
+): Promise<string | null> {
+  const client = getClient();
+  if (!client || !bucket) return null;
+  const key = jobOutputHistoryKey(userId, jobId, version);
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: buffer,
+      ContentType: "video/mp4",
+      CacheControl: "private, max-age=31536000",
+    })
+  );
+  return key;
+}
+
 export async function uploadPendingJobVideo(
   userId: string,
   jobId: string,

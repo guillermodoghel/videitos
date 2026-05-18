@@ -82,7 +82,7 @@ docs/              Architecture, workflow, product article
 | `npm run build` | Production build |
 | `npm run start` | Start production server |
 | `npm run lint` | ESLint |
-| `npm run s3:create-bucket` | Create/configure S3 bucket (if script present) |
+| `npm run s3:create-bucket` | Create/configure S3 bucket (`scripts/create-s3-bucket.mjs`) |
 
 ## Documentation
 

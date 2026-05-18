@@ -86,7 +86,28 @@ model Job {
   updatedAt             DateTime  @updatedAt
   completedAt           DateTime?
   creditTransactions    CreditTransaction[]
+  outputHistory         JobOutput[]
 
+  @@schema("videitos")
+}
+
+/** Archived video output when a completed job is retaken (previous versions). */
+model JobOutput {
+  id                  String   @id @default(cuid())
+  jobId               String
+  job                 Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  version             Int
+  outputDropboxPath   String?
+  outputVideoS3Key    String?
+  providerOperationId String?
+  preGenImageKey      String?
+  apiCost             Decimal? @db.Decimal(14, 4)
+  creditCost          Decimal? @db.Decimal(14, 4)
+  completedAt         DateTime
+  createdAt           DateTime @default(now())
+
+  @@unique([jobId, version])
+  @@index([jobId])
   @@schema("videitos")
 }
 
