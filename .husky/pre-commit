@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+
+# prisma.config.ts requires POSTGRES_PRISMA_URL (generate does not connect to the DB).
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+fi
+
+export POSTGRES_PRISMA_URL="${POSTGRES_PRISMA_URL:-postgresql://user:password@localhost:5432/videitos?schema=videitos}"
+
+npm run typecheck

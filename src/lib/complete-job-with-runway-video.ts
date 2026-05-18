@@ -446,7 +446,6 @@ export async function completeJobWithRunwayVideo(params: {
   }
 
   const outputKey = jobOutputVideoKey(job.userId, job.id);
-  const pendingKey = pendingJobVideoKey(job.userId, job.id);
   let outputCached = false;
   if (await s3ObjectExists(pendingKey)) {
     outputCached = await copyS3Object(pendingKey, outputKey);

@@ -8,7 +8,9 @@
     "vercel-build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint",
-    "s3:create-bucket": "node scripts/create-s3-bucket.mjs"
+    "typecheck": "prisma generate && tsc --noEmit",
+    "s3:create-bucket": "node scripts/create-s3-bucket.mjs",
+    "prepare": "husky"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1001.0",
@@ -35,6 +37,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "husky": "^9.1.7",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
