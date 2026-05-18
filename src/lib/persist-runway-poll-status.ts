@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { normalizeRunwayProgress } from "@/lib/runway-progress-display";
 
 /** Store latest Runway poll result for the jobs dashboard. */
 export async function persistRunwayPollStatus(
@@ -7,7 +8,7 @@ export async function persistRunwayPollStatus(
 ): Promise<void> {
   const update: { runwayProgress?: number | null; runwayPollStatus?: string | null } = {};
   if (data.progress !== undefined) {
-    update.runwayProgress = data.progress;
+    update.runwayProgress = normalizeRunwayProgress(data.progress);
   }
   if (data.runwayStatus !== undefined) {
     update.runwayPollStatus = data.runwayStatus;

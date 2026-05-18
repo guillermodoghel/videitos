@@ -357,7 +357,10 @@ export async function processJob(
       // Show as processing in UI while creating first image (pre-gen)
       await prisma.job.update({
         where: { id: job.id },
-        data: { status: JOB_STATUS.PROCESSING },
+        data: {
+          status: JOB_STATUS.PROCESSING,
+          workflowPhase: JOB_WORKFLOW_PHASE.PREPARING,
+        },
       });
       jobLog("process", "pre-gen text-to-image starting", {
         jobId,

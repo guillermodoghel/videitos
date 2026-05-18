@@ -5,6 +5,7 @@ import {
   JOB_WORKFLOW_PHASE_LABEL,
   type JobWorkflowPhase,
 } from "@/lib/constants/job-workflow-phase";
+import { formatRunwayProgressPercent } from "@/lib/runway-progress-display";
 
 export type WorkflowGraphStepState =
   | "pending"
@@ -55,12 +56,6 @@ const ACTIVE_STATUSES = new Set<string>([
   JOB_STATUS.PROCESSING,
   JOB_STATUS.SENT_TO_VEO,
 ]);
-
-function formatRunwayProgressPercent(progress: number | null | undefined): string | null {
-  if (progress == null || Number.isNaN(progress)) return null;
-  const clamped = Math.min(1, Math.max(0, progress));
-  return `${Math.round(clamped * 100)}%`;
-}
 
 function phaseDetail(
   phase: JobWorkflowPhase,

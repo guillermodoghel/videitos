@@ -6,12 +6,10 @@ import { VIDEO_MODELS } from "@/lib/video-models";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 import { getJobWorkflowPhaseLabel } from "@/lib/job-workflow-phase-label";
+import { formatRunwayProgressPercent } from "@/lib/runway-progress-display";
+import { isActiveJobStatus } from "@/lib/job-live-update";
 import { JobWorkflowProgressGraph } from "./JobWorkflowProgressGraph";
-import {
-  isActiveJobStatus,
-  mergeJobLiveUpdates,
-  type JobLiveUpdate,
-} from "@/lib/job-live-update";
+import { mergeJobLiveUpdates, type JobLiveUpdate } from "@/lib/job-live-update";
 
 type JobRow = {
   id: string;
@@ -85,7 +83,12 @@ function statusLabel(
     [JOB_STATUS.FAILED]: "Failed",
     [JOB_STATUS.SENT_TO_VEO]: "Processing", // legacy
   };
-  return labels[status] ?? status;
+  const base = labels[status] ?? status;
+  if (isActiveJobStatus(status)) {
+    const pct = formatRunwayProgressPercent(runwayProgress);
+    if (pct) return `${base} (${pct})`;
+  }
+  return base;
 }
 
 function statusColor(
@@ -975,7 +978,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                 </tr>
                 {expandedId === j.id && (
                   <tr className="border-b border-zinc-100 bg-zinc-50/50 dark:border-zinc-700/50 dark:bg-zinc-800/30">
-                    <td colSpan={isAdmin ? 10 : 9} className="px-4 py-4">
+                    <td colSpan={isAdmin ? 10 : 9} className="overflow-visible px-4 py-4">
                       <div className="space-y-4">
                         <JobWorkflowProgressGraph
                           status={j.status}

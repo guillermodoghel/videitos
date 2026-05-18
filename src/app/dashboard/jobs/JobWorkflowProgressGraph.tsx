@@ -139,7 +139,7 @@ export function JobWorkflowProgressGraph({
           </span>
         )}
       </div>
-      <ol className="m-0 max-w-md list-none p-0" aria-label="Job workflow progress">
+      <ol className="m-0 w-full max-w-lg list-none p-0" aria-label="Job workflow progress">
         {steps.map((step, index) => (
           <WorkflowStepRow key={step.id} step={step} isLast={index === steps.length - 1} />
         ))}

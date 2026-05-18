@@ -19,6 +19,7 @@ export interface RunwayTaskStatus {
 import type { RunwayRatio } from "@/lib/video-models";
 import { downloadUrlWithRetries, type DownloadUrlOptions } from "@/lib/http-retry";
 import { classifyRunwayApiError, classifyRunwayTaskError } from "@/lib/runway-errors";
+import { normalizeRunwayProgress } from "@/lib/runway-progress-display";
 
 /** Map Veo aspect ratio to Runway ratio (image-to-video accepted values). */
 export function aspectRatioToRunwayRatio(
@@ -102,7 +103,14 @@ function parseRunwayTaskResponse(data: {
   progress?: number;
 }): RunwayTaskStatus {
   const runwayStatus = (data.status ?? "UNKNOWN").toUpperCase();
-  const progress = typeof data.progress === "number" ? data.progress : undefined;
+  const rawProgress =
+    typeof data.progress === "number"
+      ? data.progress
+      : typeof (data as { progressRatio?: number }).progressRatio === "number"
+        ? (data as { progressRatio: number }).progressRatio
+        : undefined;
+  const progress =
+    rawProgress !== undefined ? normalizeRunwayProgress(rawProgress) ?? undefined : undefined;
 
   if (runwayStatus === "SUCCEEDED") {
     const url =
