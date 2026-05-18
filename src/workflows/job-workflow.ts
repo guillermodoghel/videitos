@@ -16,10 +16,13 @@ import { WEBHOOK_JOB_STATUS } from "@/lib/constants/webhook-job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 import { JOB_WORKFLOW_PHASE } from "@/lib/constants/job-workflow-phase";
 import { setJobWorkflowPhase } from "@/lib/set-job-workflow-phase";
+import { prisma } from "@/lib/prisma";
+import { JOB_STATUS } from "@/lib/constants/job-status";
 import {
   RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY,
   RATE_LIMIT_WORKFLOW_RETRY_SECONDS,
   DROPBOX_UPLOAD_WORKFLOW_RETRY,
+  RUNWAY_POLL_WORKFLOW,
 } from "@/lib/constants/job-retry";
 
 export type ProcessStepResult =
@@ -133,12 +136,27 @@ async function resetRunwayCreditsRetry_step(jobId: string): Promise<void> {
   await resetJobForRunwayCreditsRetry(jobId);
 }
 
+async function isJobCompleted_step(jobId: string): Promise<boolean> {
+  "use step";
+  const job = await prisma.job.findUnique({
+    where: { id: jobId },
+    select: { status: true },
+  });
+  return job?.status === JOB_STATUS.COMPLETED;
+}
+
 async function pollRunwayTask_step(
   baseUrl: string,
   jobId: string,
   operationName: string,
   attempt: number
-): Promise<{ done: boolean; videoUri?: string; error?: string }> {
+): Promise<{
+  done: boolean;
+  videoUri?: string;
+  error?: string;
+  runwayStatus?: string;
+  progress?: number;
+}> {
   "use step";
 
   const url = `${baseUrl.replace(/\/$/, "")}/api/job-status`;
@@ -163,11 +181,19 @@ async function pollRunwayTask_step(
     throw new Error(`job-status failed: ${res.status}`);
   }
 
-  const status = (await res.json()) as { done: boolean; videoUri?: string; error?: string };
+  const status = (await res.json()) as {
+    done: boolean;
+    videoUri?: string;
+    error?: string;
+    runwayStatus?: string;
+    progress?: number;
+  };
   jobLog("workflow:poll", "step result", {
     jobId,
     operationName,
     attempt,
+    runwayStatus: status.runwayStatus ?? null,
+    progress: status.progress ?? null,
     done: status.done,
     hasVideoUri: !!status.videoUri,
     error: status.error ?? null,
@@ -361,6 +387,33 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
     let pollAttempt = 0;
     for (;;) {
       pollAttempt += 1;
+
+      if (pollAttempt > RUNWAY_POLL_WORKFLOW.maxAttempts) {
+        jobLogError("workflow", "poll timeout waiting for Runway", {
+          jobId,
+          operationName,
+          pollAttempts: pollAttempt,
+          maxAttempts: RUNWAY_POLL_WORKFLOW.maxAttempts,
+          elapsedMs: Date.now() - workflowStartedAt,
+        });
+        await webhookJob_step(callbackBaseUrl, {
+          status: WEBHOOK_JOB_STATUS.ERROR,
+          jobId,
+          operationName,
+          error: "Timed out waiting for Runway generation (60 minutes)",
+        });
+        return;
+      }
+
+      if (await isJobCompleted_step(jobId)) {
+        jobLog("workflow", "job already completed — stop polling", {
+          jobId,
+          operationName,
+          pollAttempts: pollAttempt,
+        });
+        return;
+      }
+
       const status = await pollRunwayTask_step(callbackBaseUrl, jobId, operationName, pollAttempt);
 
       if (status.done && status.videoUri) {
@@ -483,9 +536,11 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
         jobId,
         operationName,
         pollAttempt,
-        sleep: "5 seconds",
+        runwayStatus: status.runwayStatus ?? null,
+        progress: status.progress ?? null,
+        sleepSeconds: RUNWAY_POLL_WORKFLOW.intervalSeconds,
       });
-      await sleep("5 seconds");
+      await sleep(`${RUNWAY_POLL_WORKFLOW.intervalSeconds} seconds`);
     }
   }
 }

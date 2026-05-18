@@ -11,6 +11,9 @@ export interface RunwayTaskStatus {
   done: boolean;
   videoUri?: string;
   error?: string;
+  /** Raw Runway status: PENDING, RUNNING, THROTTLED, SUCCEEDED, FAILED, CANCELLED. */
+  runwayStatus?: string;
+  progress?: number;
 }
 
 import type { RunwayRatio } from "@/lib/video-models";
@@ -111,27 +114,45 @@ export async function getRunwayTaskStatus(
     };
   }
 
-  let data: { status?: string; output?: string[]; error?: string };
+  let data: {
+    status?: string;
+    output?: unknown;
+    artifacts?: unknown;
+    error?: string;
+    failure?: string;
+    failureCode?: string;
+    progress?: number;
+  };
   try {
     data = await res.json();
   } catch {
     return { done: true, error: "Invalid Runway task response" };
   }
 
-  const status = (data.status ?? "").toUpperCase();
-  if (status === "SUCCEEDED") {
-    const url = extractRunwayOutputUrl(data.output);
+  const runwayStatus = (data.status ?? "UNKNOWN").toUpperCase();
+  const progress = typeof data.progress === "number" ? data.progress : undefined;
+
+  if (runwayStatus === "SUCCEEDED") {
+    const url =
+      extractRunwayOutputUrl(data.output) ?? extractRunwayOutputUrl(data.artifacts);
     if (url) {
-      return { done: true, videoUri: url };
+      return { done: true, videoUri: url, runwayStatus, progress };
     }
-    return { done: true, error: "No output URL in Runway response" };
+    return { done: true, error: "No output URL in Runway response", runwayStatus, progress };
   }
-  if (status === "FAILED" || status === "CANCELLED" || status === "CANCELED") {
-    const raw = typeof data.error === "string" ? data.error : "Task failed";
-    return { done: true, error: classifyRunwayTaskError(raw) };
+  if (runwayStatus === "FAILED" || runwayStatus === "CANCELLED" || runwayStatus === "CANCELED") {
+    const raw =
+      typeof data.failure === "string"
+        ? data.failure
+        : typeof data.error === "string"
+          ? data.error
+          : data.failureCode
+            ? `Task failed (${data.failureCode})`
+            : "Task failed";
+    return { done: true, error: classifyRunwayTaskError(raw), runwayStatus, progress };
   }
 
-  return { done: false };
+  return { done: false, runwayStatus, progress };
 }
 
 /** Runway may return output as string URLs or objects with url/uri. */

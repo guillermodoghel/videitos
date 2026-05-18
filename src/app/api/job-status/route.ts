@@ -68,6 +68,8 @@ export async function POST(request: NextRequest) {
     jobLog("status", "Runway task status", {
       jobId,
       operationName,
+      runwayStatus: status.runwayStatus ?? null,
+      progress: status.progress ?? null,
       done: status.done,
       hasVideoUri: !!status.videoUri,
       error: status.error ?? null,
