@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { archiveJobOutputHistory } from "@/lib/archive-job-output-history";
 import { startJobWorkflow } from "@/lib/start-job-workflow";
+import { deletePendingJobVideo } from "@/lib/s3";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { jobLog, jobLogError } from "@/lib/job-log";
 
@@ -75,6 +76,16 @@ export async function rerunJob(jobId: string, mode: RerunMode): Promise<RerunJob
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  try {
+    await deletePendingJobVideo(job.userId, jobId);
+  } catch (err) {
+    jobLogError("rerun", "failed to clear pending S3 video (continuing)", {
+      jobId,
+      mode,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   await prisma.job.update({

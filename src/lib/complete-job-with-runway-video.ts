@@ -311,7 +311,8 @@ export async function completeJobWithRunwayVideo(params: {
   let uploadResult: { path_display?: string } | null;
   try {
     uploadResult = await uploadFile(token, outputPath, videoBuffer, {
-      mode: "add",
+      // overwrite: same job id → same output name; retries must not fail on path/conflict
+      mode: "overwrite",
       onUnauthorized: () => getValidAccessTokenWithOptions(job.userId, { forceRefresh: true }),
       logContext: {
         source,

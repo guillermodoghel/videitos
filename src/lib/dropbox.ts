@@ -473,6 +473,20 @@ function parseDropboxUploadErrorForLog(errJson: unknown, errText: string): {
   return { errorSummary: summary, errorTag, rawBodyPreview };
 }
 
+/** True when Dropbox rejects upload because the path already exists (mode "add"). */
+function isDropboxPathConflict(status: number, errJson: unknown): boolean {
+  if (status === 409) return true;
+  if (!errJson || typeof errJson !== "object") return false;
+  const summary = (errJson as { error_summary?: string }).error_summary;
+  if (typeof summary === "string" && summary.startsWith("path/conflict")) {
+    return true;
+  }
+  const err = (errJson as { error?: { [".tag"]?: string; path?: { [".tag"]?: string } } }).error;
+  if (!err) return false;
+  if (err[".tag"] === "path" && err.path?.[".tag"] === "conflict") return true;
+  return err[".tag"] === "path_conflict";
+}
+
 /** Upload a file to Dropbox. path: full path e.g. "/Folder/out.mp4". mode: "add" (default) or "overwrite". */
 export async function uploadFile(
   accessToken: string,
@@ -488,11 +502,12 @@ export async function uploadFile(
 ): Promise<{ path_display?: string } | null> {
   const safePath = sanitizePathForHeader(path.replace(/\/$/, ""));
   const maxRetries = Math.max(0, options.maxRetries ?? DEFAULT_HTTP_MAX_RETRIES);
-  const mode = options.mode ?? "add";
+  let mode = options.mode ?? "add";
   const contentLengthBytes = body.byteLength;
   const logContext = options.logContext ?? {};
   let token = accessToken;
   let didForceRefresh = false;
+  let pathConflictRetriedWithOverwrite = false;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     let res: Response;
@@ -558,6 +573,21 @@ export async function uploadFile(
       rawResponseBodyPreview: parsed.rawBodyPreview,
     };
     console.error("[Dropbox upload] failed", baseLog);
+
+    if (
+      !pathConflictRetriedWithOverwrite &&
+      mode === "add" &&
+      isDropboxPathConflict(res.status, errJson)
+    ) {
+      pathConflictRetriedWithOverwrite = true;
+      mode = "overwrite";
+      console.log("[Dropbox upload] path conflict — retrying with overwrite", {
+        ...logContext,
+        requestId,
+        pathPreview: safePath.slice(0, 200),
+      });
+      continue;
+    }
 
     if (res.status === 429) {
       const retryAfterSeconds = parseDropboxRetryAfterSeconds(retryAfter);
