@@ -212,6 +212,7 @@ export async function completeJobWithRunwayVideo(params: {
     if (!videoUri) {
       videoUri = await resolveRunwayVideoUriForJob(jobId);
       if (videoUri) {
+        await persistRunwayVideoUri(jobId, videoUri);
         try {
           videoUriHost = new URL(videoUri).hostname;
         } catch {
@@ -268,6 +269,17 @@ export async function completeJobWithRunwayVideo(params: {
     }
   }
 
+  if (videoBuffer && !videoUri) {
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { rateLimitClaimedAt: null },
+    });
+    jobLog("complete", "Runway slot released — video in S3, Dropbox upload pending", {
+      jobId: job.id,
+      source,
+    });
+  }
+
   const token = await getValidAccessToken(job.userId);
   if (!token) {
     await prisma.job.update({
@@ -315,12 +327,13 @@ export async function completeJobWithRunwayVideo(params: {
     });
   } catch (err) {
     if (isDropboxRateLimitError(err)) {
-      if (videoUri) {
-        await prisma.job.update({
-          where: { id: job.id },
-          data: { runwayOutputVideoUri: videoUri },
-        });
-      }
+      await prisma.job.update({
+        where: { id: job.id },
+        data: {
+          ...(videoUri ? { runwayOutputVideoUri: videoUri } : {}),
+          workflowPhase: JOB_WORKFLOW_PHASE.WAITING_DROPBOX_RATE_LIMIT,
+        },
+      });
       jobLog("complete", "Dropbox rate limited — deferring retry", {
         jobId: job.id,
         retryAfterSeconds: err.retryAfterSeconds,

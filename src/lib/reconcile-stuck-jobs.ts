@@ -6,6 +6,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { JOB_STATUS } from "@/lib/constants/job-status";
+import { JOB_WORKFLOW_PHASE } from "@/lib/constants/job-workflow-phase";
 import { getRunwayTaskStatus } from "@/lib/runway";
 import { isRunwayImageToVideoModel } from "@/lib/video-models";
 import { getRunwayApiKeyForUser } from "@/lib/runway-api-key";
@@ -27,6 +28,12 @@ export async function reconcileStuckProcessingJobs(opts?: {
       ...(opts?.userId ? { userId: opts.userId } : {}),
       status: JOB_STATUS.PROCESSING,
       providerOperationId: { not: null },
+      workflowPhase: {
+        notIn: [
+          JOB_WORKFLOW_PHASE.UPLOADING,
+          JOB_WORKFLOW_PHASE.WAITING_DROPBOX_RATE_LIMIT,
+        ],
+      },
       updatedAt: { lt: stuckBefore },
     },
     orderBy: { updatedAt: "asc" },

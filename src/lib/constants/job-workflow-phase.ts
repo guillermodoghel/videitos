@@ -12,6 +12,7 @@ export const JOB_WORKFLOW_PHASE = {
   GENERATING: "generating",
   POLLING: "polling",
   UPLOADING: "uploading",
+  WAITING_DROPBOX_RATE_LIMIT: "waiting_dropbox_rate_limit",
 } as const;
 
 export type JobWorkflowPhase =
@@ -27,4 +28,5 @@ export const JOB_WORKFLOW_PHASE_LABEL: Record<JobWorkflowPhase, string> = {
   [JOB_WORKFLOW_PHASE.GENERATING]: "Generating video",
   [JOB_WORKFLOW_PHASE.POLLING]: "Checking generation status",
   [JOB_WORKFLOW_PHASE.UPLOADING]: "Uploading to Dropbox",
+  [JOB_WORKFLOW_PHASE.WAITING_DROPBOX_RATE_LIMIT]: "Waiting for Dropbox (rate limit)",
 };

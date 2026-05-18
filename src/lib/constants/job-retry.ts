@@ -10,7 +10,9 @@ export const RATE_LIMIT_WORKFLOW_RETRY_SECONDS = 5;
 
 /** Workflow retries when Dropbox returns 429 with a long retry-after. */
 export const DROPBOX_UPLOAD_WORKFLOW_RETRY = {
-  maxAttempts: 12,
+  maxAttempts: 24,
+  /** Cap sleep (Dropbox often sends 300s; we retry sooner using S3 cache). */
+  maxSleepSeconds: 90,
 } as const;
 
 /** Poll Runway task status until done or timeout (5s between polls). */

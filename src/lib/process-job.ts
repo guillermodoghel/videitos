@@ -45,7 +45,11 @@ function activeRunwayJobsWhere(opts: { userId?: string; platformKeyOnly?: boolea
     ...(opts.platformKeyOnly ? { user: { runwayApiKey: null } } : {}),
     template: { model: { in: [...RUNWAY_IMAGE_TO_VIDEO_IDS] } },
     OR: [
-      { status: JOB_STATUS.PROCESSING },
+      {
+        // Runway generation in flight (not yet waiting on Dropbox upload).
+        status: JOB_STATUS.PROCESSING,
+        runwayOutputVideoUri: null,
+      },
       {
         status: JOB_STATUS.QUEUED,
         rateLimitClaimedAt: { gte: claimSince },

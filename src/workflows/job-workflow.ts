@@ -214,7 +214,7 @@ async function workflowWait_dropboxUpload_step(
 ): Promise<void> {
   "use step";
   jobLog("workflow:wait", "Dropbox upload rate limit wait", { jobId, attempt, sleepSeconds });
-  await setJobWorkflowPhase(jobId, JOB_WORKFLOW_PHASE.UPLOADING);
+  await setJobWorkflowPhase(jobId, JOB_WORKFLOW_PHASE.WAITING_DROPBOX_RATE_LIMIT);
 }
 
 async function webhookJob_step(
@@ -439,7 +439,10 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
             "retryable" in webhookResult &&
             webhookResult.retryable
           ) {
-            const { retryAfterSeconds } = webhookResult;
+            const retryAfterSeconds = Math.min(
+              webhookResult.retryAfterSeconds,
+              DROPBOX_UPLOAD_WORKFLOW_RETRY.maxSleepSeconds
+            );
             if (uploadAttempt >= DROPBOX_UPLOAD_WORKFLOW_RETRY.maxAttempts) {
               jobLogError("workflow", "Dropbox upload retries exhausted", {
                 jobId,
