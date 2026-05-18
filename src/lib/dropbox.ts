@@ -221,6 +221,13 @@ export async function listFolder(
   return { entries: data.entries ?? [] };
 }
 
+export class DropboxListFolderResetError extends Error {
+  constructor() {
+    super("Dropbox list_folder cursor expired (reset)");
+    this.name = "DropboxListFolderResetError";
+  }
+}
+
 /** List folder and return cursor for later list_folder/continue (used by webhook) */
 export async function listFolderWithCursor(
   accessToken: string,
@@ -228,7 +235,7 @@ export async function listFolderWithCursor(
 ): Promise<{ entries: ListFolderEntry[]; cursor: string; has_more: boolean }> {
   const res = await dropboxFetch(accessToken, "/files/list_folder", {
     method: "POST",
-    body: { path: path || "", recursive: false, include_media_info: false },
+    body: { path: path || "", recursive: true, include_media_info: false },
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -253,6 +260,8 @@ export async function listFolderContinue(
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
+    const tag = (err as { error?: { ".tag"?: string } }).error?.[".tag"];
+    if (tag === "reset") throw new DropboxListFolderResetError();
     throw new Error((err as { error?: { summary?: string } }).error?.summary ?? `list_folder/continue ${res.status}`);
   }
   const data = await res.json();

@@ -3,6 +3,7 @@ import { getSessionUserId } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { parseTemplateConfig, isRunwayImageToVideoModel } from "@/lib/video-models";
 import { uploadReferenceImage, uploadPreGenReferenceImage } from "@/lib/s3";
+import { normalizeDropboxPath } from "@/lib/dropbox-path";
 
 const ALLOWED_MIMES = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
@@ -192,10 +193,23 @@ export async function PATCH(
   const finalConfig: Record<string, unknown> = { ...mergedWithoutPreGen, referenceImageUrls: refsForModel };
   if (preGen) finalConfig.preGen = preGen;
 
-  const data: { name?: string; enabled?: boolean; config?: object; dropboxSourcePath?: string | null; dropboxDestinationPath?: string | null } = {};
+  const data: {
+    name?: string;
+    enabled?: boolean;
+    config?: object;
+    dropboxSourcePath?: string | null;
+    dropboxDestinationPath?: string | null;
+    dropboxSourceCursor?: string | null;
+  } = {};
   if (typeof name === "string") data.name = name;
   if (typeof enabled === "boolean") data.enabled = enabled;
-  if (dropboxSourcePath !== undefined) data.dropboxSourcePath = dropboxSourcePath || null;
+  if (dropboxSourcePath !== undefined) {
+    const nextPath = dropboxSourcePath || null;
+    data.dropboxSourcePath = nextPath;
+    if (normalizeDropboxPath(nextPath) !== normalizeDropboxPath(existing.dropboxSourcePath)) {
+      data.dropboxSourceCursor = null;
+    }
+  }
   if (dropboxDestinationPath !== undefined) data.dropboxDestinationPath = dropboxDestinationPath || null;
   data.config = finalConfig as object;
 

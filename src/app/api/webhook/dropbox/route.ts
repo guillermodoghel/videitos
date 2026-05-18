@@ -1,13 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHmac } from "crypto";
 import { prisma } from "@/lib/prisma";
-import { JOB_STATUS } from "@/lib/constants/job-status";
-import {
-  getValidAccessToken,
-  listFolderWithCursor,
-  listFolderContinue,
-} from "@/lib/dropbox";
-import { startJobWorkflow } from "@/lib/start-job-workflow";
+import { getValidAccessToken } from "@/lib/dropbox";
+import { syncTemplateFromDropbox } from "@/lib/dropbox-template-sync";
 
 /** GET: Dropbox webhook verification - echo the challenge parameter */
 export async function GET(request: NextRequest) {
@@ -108,96 +103,25 @@ export async function POST(request: NextRequest) {
       console.log("[Dropbox webhook] User templates", { userId: user.id, templatesCount: templates.length, templates: templates.map((t) => ({ id: t.id, name: t.name, model: t.model, path: t.dropboxSourcePath, hasCursor: !!t.dropboxSourceCursor })) });
 
       for (const template of templates) {
-        const path = template.dropboxSourcePath!;
-        let cursor = template.dropboxSourceCursor;
-        let hasMore = true;
-        let newCursor = cursor;
-
-        const userId = user.id;
-      async function processEntries(entries: { ".tag"?: string; name?: string; path_display?: string; id?: string }[]) {
-        const list = entries ?? [];
-        const fileCount = list.filter((e) => e[".tag"] === "file").length;
-        if (fileCount > 0) {
-          console.log("[Dropbox webhook] Processing entries", { templateId: template.id, templateName: template.name, entriesCount: list.length, fileCount });
-        }
-        for (const entry of list) {
-          if (entry[".tag"] !== "file") continue;
-          const filename = entry.name ?? entry.path_display?.split("/").pop() ?? "unknown";
-          const sourceFilePath = entry.path_display ?? `${path}/${filename}`.replace(/\/\/+/g, "/");
-          const fileId = entry.id ?? (entry as Record<string, unknown>).id as string | undefined;
-          const recentCutoff = new Date(Date.now() - 10 * 60 * 1000);
-          const existing = await prisma.job.findFirst({
-            where: {
+        try {
+          const result = await syncTemplateFromDropbox(token, {
+            id: template.id,
+            name: template.name,
+            model: template.model,
+            dropboxSourcePath: template.dropboxSourcePath!,
+            dropboxSourceCursor: template.dropboxSourceCursor,
+          }, user.id);
+          if (result.jobsCreated > 0) {
+            console.log("[Dropbox webhook] Sync complete", {
               templateId: template.id,
-              createdAt: { gte: recentCutoff },
-              ...(fileId
-                ? { dropboxSourceFileId: fileId }
-                : { dropboxSourceFilePath: sourceFilePath }),
-            },
-          });
-          if (existing) continue;
-          console.log("[Dropbox webhook] New file:", { name: filename, path: sourceFilePath, fileId: fileId ?? "none", template: template.name });
-          const job = await prisma.job.create({
-            data: {
-              userId,
-              templateId: template.id,
-              status: JOB_STATUS.QUEUED,
-              dropboxSourceFilePath: sourceFilePath,
-              dropboxSourceFileId: fileId ?? null,
-            },
-          });
-          const host = process.env.HOSTNAME ?? "http://localhost:3000";
-          startJobWorkflow({
-            jobId: job.id,
-            callbackBaseUrl: host.replace(/\/$/, ""),
-          }).catch((err) => console.error("[Dropbox webhook] Start job workflow failed:", err));
-          console.log("[Dropbox webhook] Job created and workflow started", { jobId: job.id, templateName: template.name, model: template.model });
-        }
-      }
-
-      try {
-        if (!cursor) {
-          console.log("[Dropbox webhook] Initial listing (no cursor)", { templateId: template.id, templateName: template.name, path });
-          const initial = await listFolderWithCursor(token, path);
-          console.log("[Dropbox webhook] Initial list_folder response", { templateId: template.id, entriesCount: initial.entries.length, hasMore: initial.has_more });
-          await processEntries(initial.entries);
-          newCursor = initial.cursor;
-          hasMore = initial.has_more;
-          while (hasMore && newCursor) {
-            const next = await listFolderContinue(token, newCursor);
-            console.log("[Dropbox webhook] list_folder/continue page", { templateId: template.id, entriesCount: next.entries.length, hasMore: next.has_more });
-            await processEntries(next.entries);
-            newCursor = next.cursor;
-            hasMore = next.has_more;
+              jobsCreated: result.jobsCreated,
+              filesSeen: result.filesSeen,
+            });
           }
-          await prisma.template.update({
-            where: { id: template.id },
-            data: { dropboxSourceCursor: newCursor },
-          });
-          console.log("[Dropbox webhook] Cursor saved (initial run)", { templateId: template.id, templateName: template.name });
-          continue;
+        } catch (err) {
+          console.error(`[Dropbox webhook] Error processing template ${template.id}:`, err);
         }
-
-        console.log("[Dropbox webhook] Delta (has cursor)", { templateId: template.id, templateName: template.name, path });
-        while (hasMore && newCursor) {
-          const result = await listFolderContinue(token, newCursor);
-          console.log("[Dropbox webhook] list_folder/continue delta", { templateId: template.id, entriesCount: result.entries.length, hasMore: result.has_more });
-          newCursor = result.cursor;
-          hasMore = result.has_more;
-          await processEntries(result.entries);
-        }
-
-        if (newCursor) {
-          await prisma.template.update({
-            where: { id: template.id },
-            data: { dropboxSourceCursor: newCursor },
-          });
-          console.log("[Dropbox webhook] Cursor updated (delta)", { templateId: template.id, templateName: template.name });
-        }
-      } catch (err) {
-        console.error(`[Dropbox webhook] Error processing template ${template.id}:`, err);
       }
-    }
     }
   }
 
