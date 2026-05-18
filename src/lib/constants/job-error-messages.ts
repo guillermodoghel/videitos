@@ -3,8 +3,12 @@
  * process-job sets display message; webhook/job may overwrite with error code string.
  */
 export const JOB_ERROR = {
+  /** Videitos platform credit balance (not Runway). */
   INSUFFICIENT_CREDITS: "Insufficient credits",
   INSUFFICIENT_CREDITS_CODE: "insufficient_credits",
+  /** Runway API org out of credits (402 / billing). */
+  RUNWAY_INSUFFICIENT_CREDITS: "Runway account has insufficient credits",
+  RUNWAY_INSUFFICIENT_CREDITS_CODE: "runway_insufficient_credits",
   NO_RUNWAY_API_KEY: "No Runway API key. Add your key in Settings or ask an admin to add platform key.",
   DROPBOX_NOT_CONNECTED: "Dropbox not connected",
   DROPBOX_UPLOAD_FAILED: "Failed to upload to Dropbox",

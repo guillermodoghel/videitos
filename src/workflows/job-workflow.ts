@@ -5,13 +5,28 @@
  */
 
 import { sleep } from "workflow";
-import { processJob } from "@/lib/process-job";
+import {
+  processJob,
+  markJobFailedRunwayInsufficientCredits,
+  resetJobForRunwayCreditsRetry,
+} from "@/lib/process-job";
 import { jobLog, jobLogError } from "@/lib/job-log";
+import { isRunwayInsufficientCreditsError } from "@/lib/runway-errors";
 import { WEBHOOK_JOB_STATUS } from "@/lib/constants/webhook-job-status";
+import { JOB_ERROR } from "@/lib/constants/job-error-messages";
+import {
+  RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY,
+  RATE_LIMIT_WORKFLOW_RETRY_SECONDS,
+} from "@/lib/constants/job-retry";
 
 export type ProcessStepResult =
   | { ok: true; operationName: string }
-  | { ok: false; retryable: true }
+  | {
+      ok: false;
+      retryable: true;
+      retryReason: "rate_limit" | "runway_insufficient_credits";
+      retryAfterSeconds: number;
+    }
   | { ok: false; retryable: false; error: string };
 
 async function runProcessJobStep(jobId: string, attempt: number): Promise<ProcessStepResult> {
@@ -37,7 +52,26 @@ async function runProcessJobStep(jobId: string, attempt: number): Promise<Proces
       attempt,
       elapsedMs,
     });
-    return { ok: false, retryable: true };
+    return {
+      ok: false,
+      retryable: true,
+      retryReason: "rate_limit",
+      retryAfterSeconds: RATE_LIMIT_WORKFLOW_RETRY_SECONDS,
+    };
+  }
+  if (result.error === JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS_CODE) {
+    jobLog("workflow:process", "Runway out of credits (will retry)", {
+      jobId,
+      attempt,
+      elapsedMs,
+      retryAfterSeconds: RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY.intervalSeconds,
+    });
+    return {
+      ok: false,
+      retryable: true,
+      retryReason: "runway_insufficient_credits",
+      retryAfterSeconds: RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY.intervalSeconds,
+    };
   }
   jobLogError("workflow:process", "step failed (fatal)", {
     jobId,
@@ -46,6 +80,16 @@ async function runProcessJobStep(jobId: string, attempt: number): Promise<Proces
     elapsedMs,
   });
   return { ok: false, retryable: false, error: result.error };
+}
+
+async function failRunwayInsufficientCreditsStep(jobId: string): Promise<void> {
+  "use step";
+  await markJobFailedRunwayInsufficientCredits(jobId);
+}
+
+async function resetRunwayCreditsRetryStep(jobId: string): Promise<void> {
+  "use step";
+  await resetJobForRunwayCreditsRetry(jobId);
 }
 
 async function checkJobStatusStep(
@@ -147,95 +191,133 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
 
   let operationName: string;
   let processAttempt = 0;
-  for (;;) {
-    processAttempt += 1;
-    const stepResult = await runProcessJobStep(jobId, processAttempt);
-    if (stepResult.ok) {
-      operationName = stepResult.operationName;
-      jobLog("workflow", "process phase complete", {
-        jobId,
-        operationName,
-        processAttempts: processAttempt,
-      });
-      break;
-    }
-    if (stepResult.retryable) {
-      jobLog("workflow", "sleeping before process retry", {
-        jobId,
-        processAttempt,
-        sleep: "15 seconds",
-      });
-      await sleep("15 seconds");
-      continue;
-    }
-    jobLogError("workflow", "run failed at process phase", {
-      jobId,
-      error: stepResult.error,
-      processAttempts: processAttempt,
-      elapsedMs: Date.now() - workflowStartedAt,
-    });
-    await webhookJobStep(callbackBaseUrl, {
-      status: WEBHOOK_JOB_STATUS.ERROR,
-      jobId,
-      error: stepResult.error,
-    });
-    return;
-  }
+  let runwayCreditsWaitAttempts = 0;
 
-  let pollAttempt = 0;
-  for (;;) {
-    pollAttempt += 1;
-    const status = await checkJobStatusStep(callbackBaseUrl, jobId, operationName, pollAttempt);
-
-    if (status.done && status.videoUri) {
-      jobLog("workflow", "poll phase complete — video ready", {
+  main: while (true) {
+    for (;;) {
+      processAttempt += 1;
+      const stepResult = await runProcessJobStep(jobId, processAttempt);
+      if (stepResult.ok) {
+        operationName = stepResult.operationName;
+        jobLog("workflow", "process phase complete", {
+          jobId,
+          operationName,
+          processAttempts: processAttempt,
+          runwayCreditsWaitAttempts,
+        });
+        break;
+      }
+      if (stepResult.retryable) {
+        if (stepResult.retryReason === "runway_insufficient_credits") {
+          runwayCreditsWaitAttempts += 1;
+          if (runwayCreditsWaitAttempts >= RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY.maxAttempts) {
+            jobLogError("workflow", "Runway credits retries exhausted", {
+              jobId,
+              attempts: runwayCreditsWaitAttempts,
+              maxAttempts: RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY.maxAttempts,
+            });
+            await failRunwayInsufficientCreditsStep(jobId);
+            return;
+          }
+        }
+        jobLog("workflow", "sleeping before process retry", {
+          jobId,
+          processAttempt,
+          retryReason: stepResult.retryReason,
+          sleepSeconds: stepResult.retryAfterSeconds,
+          runwayCreditsWaitAttempts,
+        });
+        await sleep(`${stepResult.retryAfterSeconds} seconds`);
+        continue;
+      }
+      jobLogError("workflow", "run failed at process phase", {
         jobId,
-        operationName,
-        pollAttempts: pollAttempt,
-        elapsedMs: Date.now() - workflowStartedAt,
-      });
-      await webhookJobStep(callbackBaseUrl, {
-        status: WEBHOOK_JOB_STATUS.READY,
-        jobId,
-        operationName,
-        videoUri: status.videoUri,
-      });
-      jobLog("workflow", "run finished successfully", {
-        jobId,
-        operationName,
-        totalElapsedMs: Date.now() - workflowStartedAt,
+        error: stepResult.error,
         processAttempts: processAttempt,
-        pollAttempts: pollAttempt,
-      });
-      return;
-    }
-    if (status.done && status.error) {
-      jobLogError("workflow", "poll phase failed", {
-        jobId,
-        operationName,
-        error: status.error,
-        pollAttempts: pollAttempt,
         elapsedMs: Date.now() - workflowStartedAt,
       });
       await webhookJobStep(callbackBaseUrl, {
         status: WEBHOOK_JOB_STATUS.ERROR,
         jobId,
-        operationName,
-        error: status.error,
-      });
-      jobLog("workflow", "run finished with provider error", {
-        jobId,
-        totalElapsedMs: Date.now() - workflowStartedAt,
+        error: stepResult.error,
       });
       return;
     }
 
-    jobLog("workflow", "sleeping before next poll", {
-      jobId,
-      operationName,
-      pollAttempt,
-      sleep: "5 seconds",
-    });
-    await sleep("5 seconds");
+    let pollAttempt = 0;
+    for (;;) {
+      pollAttempt += 1;
+      const status = await checkJobStatusStep(callbackBaseUrl, jobId, operationName, pollAttempt);
+
+      if (status.done && status.videoUri) {
+        jobLog("workflow", "poll phase complete — video ready", {
+          jobId,
+          operationName,
+          pollAttempts: pollAttempt,
+          elapsedMs: Date.now() - workflowStartedAt,
+        });
+        await webhookJobStep(callbackBaseUrl, {
+          status: WEBHOOK_JOB_STATUS.READY,
+          jobId,
+          operationName,
+          videoUri: status.videoUri,
+        });
+        jobLog("workflow", "run finished successfully", {
+          jobId,
+          operationName,
+          totalElapsedMs: Date.now() - workflowStartedAt,
+          processAttempts: processAttempt,
+          pollAttempts: pollAttempt,
+        });
+        return;
+      }
+      if (status.done && status.error) {
+        if (isRunwayInsufficientCreditsError(status.error)) {
+          runwayCreditsWaitAttempts += 1;
+          if (runwayCreditsWaitAttempts >= RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY.maxAttempts) {
+            jobLogError("workflow", "Runway credits retries exhausted (poll)", {
+              jobId,
+              attempts: runwayCreditsWaitAttempts,
+            });
+            await failRunwayInsufficientCreditsStep(jobId);
+            return;
+          }
+          jobLog("workflow", "Runway credits error on poll — reset and retry process", {
+            jobId,
+            error: status.error,
+            runwayCreditsWaitAttempts,
+          });
+          await resetRunwayCreditsRetryStep(jobId);
+          await sleep(`${RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY.intervalSeconds} seconds`);
+          continue main;
+        }
+        jobLogError("workflow", "poll phase failed", {
+          jobId,
+          operationName,
+          error: status.error,
+          pollAttempts: pollAttempt,
+          elapsedMs: Date.now() - workflowStartedAt,
+        });
+        await webhookJobStep(callbackBaseUrl, {
+          status: WEBHOOK_JOB_STATUS.ERROR,
+          jobId,
+          operationName,
+          error: status.error,
+        });
+        jobLog("workflow", "run finished with provider error", {
+          jobId,
+          totalElapsedMs: Date.now() - workflowStartedAt,
+        });
+        return;
+      }
+
+      jobLog("workflow", "sleeping before next poll", {
+        jobId,
+        operationName,
+        pollAttempt,
+        sleep: "5 seconds",
+      });
+      await sleep("5 seconds");
+    }
   }
 }

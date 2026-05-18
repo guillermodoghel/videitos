@@ -48,6 +48,14 @@ function formatDuration(createdAt: string, completedAt: string | null): string {
 
 function statusLabel(status: string, errorMessage: string | null | undefined): string {
   if (status === JOB_STATUS.FAILED && errorMessage === JOB_ERROR.CANCELED) return "Canceled";
+  if (
+    status === JOB_STATUS.QUEUED &&
+    errorMessage != null &&
+    (errorMessage === JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS ||
+      errorMessage === JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS_CODE)
+  ) {
+    return "Waiting for Runway credits";
+  }
   const labels: Record<string, string> = {
     [JOB_STATUS.QUEUED]: "Queued",
     [JOB_STATUS.PROCESSING]: "Processing",
@@ -59,6 +67,14 @@ function statusLabel(status: string, errorMessage: string | null | undefined): s
 }
 
 function statusColor(status: string, errorMessage: string | null | undefined): string {
+  if (
+    status === JOB_STATUS.QUEUED &&
+    errorMessage != null &&
+    (errorMessage === JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS ||
+      errorMessage === JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS_CODE)
+  ) {
+    return "bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-300";
+  }
   if (status === JOB_STATUS.FAILED && errorMessage === JOB_ERROR.CANCELED)
     return "bg-zinc-100 text-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-300";
   if (status === JOB_STATUS.COMPLETED)

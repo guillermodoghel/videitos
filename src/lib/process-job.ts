@@ -22,6 +22,7 @@ import { maybeAutoRecharge } from "@/lib/stripe";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 import { jobLog, jobLogError } from "@/lib/job-log";
+import { isRunwayInsufficientCreditsError } from "@/lib/runway-errors";
 
 export type ProcessJobResult =
   | { ok: true; operationName: string }
@@ -31,6 +32,25 @@ export type ProcessJobOptions = {
   /** When true (e.g. from Cloud Tasks callback), skip DB rate-limit claim; queue enforces rate. */
   skipRateLimit?: boolean;
 };
+
+/** Queued jobs with a recent claim are mid-start (download / pre-gen) and use a Runway slot. */
+const RUNWAY_CLAIM_MAX_AGE_MS = 15 * 60 * 1000;
+
+function activeRunwayJobsWhere(opts: { userId?: string; platformKeyOnly?: boolean }) {
+  const claimSince = new Date(Date.now() - RUNWAY_CLAIM_MAX_AGE_MS);
+  return {
+    ...(opts.userId ? { userId: opts.userId } : {}),
+    ...(opts.platformKeyOnly ? { user: { runwayApiKey: null } } : {}),
+    template: { model: { in: [...RUNWAY_IMAGE_TO_VIDEO_IDS] } },
+    OR: [
+      { status: JOB_STATUS.PROCESSING },
+      {
+        status: JOB_STATUS.QUEUED,
+        rateLimitClaimedAt: { gte: claimSince },
+      },
+    ],
+  };
+}
 
 /**
  * Run video generation (Runway) for the job and update it to processing.
@@ -103,54 +123,55 @@ export async function processJob(
     const windowStart = new Date(Date.now() - limit.windowSeconds * 1000);
     const RATE_LIMIT_CLAIM_RETRIES = 3;
     let claimDone = false;
+    let lastRateLimitReason: string | null = null;
+    let lastActiveCount: number | null = null;
     for (let attempt = 0; attempt < RATE_LIMIT_CLAIM_RETRIES && !claimDone; attempt++) {
       try {
         await prisma.$transaction(
           async (tx) => {
             if (isRunwayModel) {
-              if (userHasKey) {
-                const runwayInProgress = await tx.job.count({
-                  where: {
-                    userId: job.userId,
-                    status: JOB_STATUS.PROCESSING,
-                    template: { model: { in: [...RUNWAY_IMAGE_TO_VIDEO_IDS] } },
-                  },
-                });
-                if (runwayInProgress >= maxConcurrent) throw new Error("rate_limit");
-              } else {
-                const platformInProgress = await tx.job.count({
-                  where: {
-                    status: JOB_STATUS.PROCESSING,
-                    user: { runwayApiKey: null },
-                    template: { model: { in: [...RUNWAY_IMAGE_TO_VIDEO_IDS] } },
-                  },
-                });
-                if (platformInProgress >= maxConcurrent) throw new Error("rate_limit");
+              const activeWhere = userHasKey
+                ? activeRunwayJobsWhere({ userId: job.userId })
+                : activeRunwayJobsWhere({ platformKeyOnly: true });
+              const activeCount = await tx.job.count({
+                where: { id: { not: jobId }, ...activeWhere },
+              });
+              if (activeCount >= maxConcurrent) {
+                lastRateLimitReason = "concurrent";
+                lastActiveCount = activeCount;
+                throw new Error("rate_limit");
               }
-            }
-            const windowWhere = {
-              template: { model: modelId },
-              OR: [
-                { sentAt: { gte: windowStart } },
-                { rateLimitClaimedAt: { gte: windowStart } },
-              ],
-            };
-            if (userHasKey) {
-              const inWindow = await tx.job.count({
-                where: { userId: job.userId, ...windowWhere },
-              });
-              if (inWindow >= limit.requestsPerWindow) throw new Error("rate_limit");
             } else {
-              const inWindow = await tx.job.count({
-                where: { user: { runwayApiKey: null }, ...windowWhere },
-              });
-              if (inWindow >= limit.requestsPerWindow) throw new Error("rate_limit");
+              const windowWhere = {
+                template: { model: modelId },
+                sentAt: { gte: windowStart },
+              };
+              if (userHasKey) {
+                const inWindow = await tx.job.count({
+                  where: { userId: job.userId, ...windowWhere },
+                });
+                if (inWindow >= limit.requestsPerWindow) {
+                  lastRateLimitReason = "window";
+                  throw new Error("rate_limit");
+                }
+              } else {
+                const inWindow = await tx.job.count({
+                  where: { user: { runwayApiKey: null }, ...windowWhere },
+                });
+                if (inWindow >= limit.requestsPerWindow) {
+                  lastRateLimitReason = "window";
+                  throw new Error("rate_limit");
+                }
+              }
             }
             const updated = await tx.job.updateMany({
               where: { id: jobId, status: JOB_STATUS.QUEUED },
               data: { rateLimitClaimedAt: new Date() },
             });
-            if (updated.count === 0) throw new Error("rate_limit");
+            if (updated.count === 0) {
+              lastRateLimitReason = "claim_race";
+              throw new Error("rate_limit");
+            }
           },
           {
             isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
@@ -176,7 +197,9 @@ export async function processJob(
           jobLog("process", "rate limited — will retry", {
             jobId,
             attempt: attempt + 1,
-            reason: "slot_or_window",
+            reason: lastRateLimitReason ?? "unknown",
+            activeCount: lastActiveCount,
+            maxConcurrent,
           });
           return { ok: false, error: "rate_limit" };
         }
@@ -219,19 +242,25 @@ export async function processJob(
       });
       const balance = Number(job.user?.creditBalance ?? 0);
       if (balance < creditCost) {
-        console.log("[process-job] jobId=%s → Insufficient credits (balance=%s, required=%s), failing job", jobId, balance, creditCost);
+        jobLog("process", "insufficient Videitos credits — failing job", {
+          jobId,
+          balance,
+          creditCost,
+        });
         await prisma.job.update({
           where: { id: job.id },
           data: {
             status: JOB_STATUS.FAILED,
-            errorMessage: "Insufficient credits",
+            errorMessage: JOB_ERROR.INSUFFICIENT_CREDITS,
             completedAt: new Date(),
             rateLimitClaimedAt: null,
           },
         });
-        // Trigger auto-recharge; if successful the job will be auto-retried
         maybeAutoRecharge(job.userId, job.id).catch((err) =>
-          console.error("[process-job] auto-recharge error:", err)
+          jobLogError("process", "auto-recharge error", {
+            jobId,
+            error: err instanceof Error ? err.message : String(err),
+          })
         );
         return { ok: false, error: JOB_ERROR.INSUFFICIENT_CREDITS_CODE };
       }
@@ -312,20 +341,7 @@ export async function processJob(
         referenceImages: refUris,
       });
       if ("error" in preGenResult) {
-        const isRateLimit = preGenResult.error === "rate_limit";
-        console.log("[process-job] jobId=%s → Pre-gen error: %s%s", jobId, preGenResult.error, isRateLimit ? " (retry)" : "");
-        if (isRateLimit) {
-          await prisma.job.update({
-            where: { id: job.id },
-            data: { status: JOB_STATUS.QUEUED },
-          });
-        } else {
-          await prisma.job.update({
-            where: { id: job.id },
-            data: { status: JOB_STATUS.FAILED, errorMessage: `Pre-generation: ${preGenResult.error}`, completedAt: new Date() },
-          });
-        }
-        return { ok: false, error: preGenResult.error };
+        return handleRunwayStepError(job, jobId, preGenResult.error, "Pre-generation");
       }
       promptImage = preGenResult.imageUri;
       const imageBuf = await downloadRunwayVideo(apiKey, preGenResult.imageUri, {
@@ -379,15 +395,7 @@ export async function processJob(
       ...((modelId === "veo3.1" || modelId === "veo3.1_fast") && { audio: config.audio !== false }),
     });
     if ("error" in result) {
-      const isRateLimit = result.error === "rate_limit";
-      console.log("[process-job] jobId=%s → Runway error: %s%s", jobId, result.error, isRateLimit ? " (retry)" : "");
-      if (!isRateLimit) {
-        await prisma.job.update({
-          where: { id: job.id },
-          data: { status: JOB_STATUS.FAILED, errorMessage: result.error, completedAt: new Date() },
-        });
-      }
-      return { ok: false, error: result.error };
+      return handleRunwayStepError(job, jobId, result.error);
     }
     await prisma.job.update({
       where: { id: job.id },
@@ -395,6 +403,7 @@ export async function processJob(
         status: JOB_STATUS.PROCESSING,
         providerOperationId: result.taskId,
         sentAt: new Date(),
+        errorMessage: null,
       },
     });
     jobLog("process", "submitted to Runway — now processing", {
@@ -412,4 +421,79 @@ export async function processJob(
     data: { status: JOB_STATUS.FAILED, errorMessage: JOB_ERROR.UNSUPPORTED_MODEL, completedAt: new Date() },
   });
   return { ok: false, error: "Unsupported model" };
+}
+
+async function handleRunwayStepError(
+  job: { id: string },
+  jobId: string,
+  error: string,
+  prefix?: string
+): Promise<ProcessJobResult> {
+  const displayError = prefix ? `${prefix}: ${error}` : error;
+
+  if (error === "rate_limit") {
+    jobLog("process", "Runway rate limit — will retry", { jobId, error });
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { status: JOB_STATUS.QUEUED, rateLimitClaimedAt: null },
+    });
+    return { ok: false, error: "rate_limit" };
+  }
+
+  if (isRunwayInsufficientCreditsError(error)) {
+    jobLog("process", "Runway insufficient credits — will retry", { jobId, error });
+    await prisma.job.update({
+      where: { id: job.id },
+      data: {
+        status: JOB_STATUS.QUEUED,
+        errorMessage: JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS,
+        completedAt: null,
+        providerOperationId: null,
+        sentAt: null,
+        rateLimitClaimedAt: null,
+      },
+    });
+    return { ok: false, error: JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS_CODE };
+  }
+
+  jobLogError("process", "Runway error (fatal)", { jobId, error: displayError });
+  await prisma.job.update({
+    where: { id: job.id },
+    data: {
+      status: JOB_STATUS.FAILED,
+      errorMessage: displayError,
+      completedAt: new Date(),
+    },
+  });
+  return { ok: false, error: displayError };
+}
+
+/** Reset job after Runway credits error during poll so process phase can run again. */
+export async function resetJobForRunwayCreditsRetry(jobId: string): Promise<void> {
+  await prisma.job.update({
+    where: { id: jobId },
+    data: {
+      status: JOB_STATUS.QUEUED,
+      errorMessage: JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS,
+      completedAt: null,
+      providerOperationId: null,
+      sentAt: null,
+      rateLimitClaimedAt: null,
+    },
+  });
+  jobLog("process", "job reset for Runway credits retry", { jobId });
+}
+
+/** Called by workflow after Runway out-of-credits retries are exhausted. */
+export async function markJobFailedRunwayInsufficientCredits(jobId: string): Promise<void> {
+  await prisma.job.update({
+    where: { id: jobId },
+    data: {
+      status: JOB_STATUS.FAILED,
+      errorMessage: JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS,
+      completedAt: new Date(),
+      rateLimitClaimedAt: null,
+    },
+  });
+  jobLogError("process", "Runway insufficient credits — retries exhausted, job failed", { jobId });
 }

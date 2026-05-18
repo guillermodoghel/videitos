@@ -15,6 +15,7 @@ export interface RunwayTaskStatus {
 
 import type { RunwayRatio } from "@/lib/video-models";
 import { downloadUrlWithRetries, type DownloadUrlOptions } from "@/lib/http-retry";
+import { classifyRunwayApiError, classifyRunwayTaskError } from "@/lib/runway-errors";
 
 /** Map Veo aspect ratio to Runway ratio (image-to-video accepted values). */
 export function aspectRatioToRunwayRatio(
@@ -71,10 +72,7 @@ export async function startRunwayImageToVideo(
 
   if (!res.ok) {
     const text = await res.text();
-    const isRateLimit = res.status === 429;
-    return {
-      error: isRateLimit ? "rate_limit" : text || `Runway API ${res.status}`,
-    };
+    return { error: classifyRunwayApiError(res.status, text) };
   }
 
   let data: { id?: string };
@@ -129,8 +127,8 @@ export async function getRunwayTaskStatus(
     return { done: true, error: "No output URL in Runway response" };
   }
   if (status === "FAILED" || status === "CANCELLED") {
-    const err = typeof data.error === "string" ? data.error : "Task failed";
-    return { done: true, error: err };
+    const raw = typeof data.error === "string" ? data.error : "Task failed";
+    return { done: true, error: classifyRunwayTaskError(raw) };
   }
 
   return { done: false };
@@ -188,10 +186,7 @@ export async function startRunwayTextToImage(
 
   if (!res.ok) {
     const text = await res.text();
-    const isRateLimit = res.status === 429;
-    return {
-      error: isRateLimit ? "rate_limit" : text || `Runway API ${res.status}`,
-    };
+    return { error: classifyRunwayApiError(res.status, text) };
   }
 
   let data: { id?: string };
