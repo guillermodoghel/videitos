@@ -98,7 +98,17 @@ function modelLabel(modelId: string): string {
   return m?.name ?? modelId;
 }
 
-function JobDetailsPanel({ job, details }: { job: JobRow; details?: JobDetails | null }) {
+function JobDetailsPanel({
+  job,
+  details,
+  onRetake,
+  retaking,
+}: {
+  job: JobRow;
+  details?: JobDetails | null;
+  onRetake?: () => void;
+  retaking?: boolean;
+}) {
   const hasInputs = details && (details.referenceImageUrls.length > 0 || details.sourceImageUrl);
   const hasPreGen = details?.preGenImageUrl;
   const hasOutput = job.status === JOB_STATUS.COMPLETED && details?.outputVideoUrl;
@@ -214,6 +224,16 @@ function JobDetailsPanel({ job, details }: { job: JobRow; details?: JobDetails |
             >
               Open in new tab
             </a>
+            {onRetake && (
+              <button
+                type="button"
+                onClick={onRetake}
+                disabled={retaking}
+                className="mt-3 rounded border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+              >
+                {retaking ? "Retake…" : "Retake — regenerar con la misma foto"}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -239,6 +259,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
   const [detailsCache, setDetailsCache] = useState<Record<string, JobDetails>>({});
   const [detailsLoading, setDetailsLoading] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [retakingId, setRetakingId] = useState<string | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [selectedForDelete, setSelectedForDelete] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
@@ -329,8 +350,13 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
   async function handleRetry(jobId: string) {
     setRetryingId(jobId);
     try {
-      const res = await fetch(`/api/jobs/${jobId}/retry`, { method: "POST" });
+      const res = await fetch(`/api/jobs/${jobId}/retry`, { method: "POST", credentials: "include" });
       if (res.ok) {
+        setDetailsCache((c) => {
+          const next = { ...c };
+          delete next[jobId];
+          return next;
+        });
         await fetchJobs();
       } else {
         const data = await res.json().catch(() => ({}));
@@ -340,6 +366,31 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
       alert("Retry failed");
     } finally {
       setRetryingId(null);
+    }
+  }
+
+  async function handleRetake(jobId: string) {
+    if (!confirm("Regenerar este video con la misma foto? Se cobrarán créditos al completar.")) {
+      return;
+    }
+    setRetakingId(jobId);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/retake`, { method: "POST", credentials: "include" });
+      if (res.ok) {
+        setDetailsCache((c) => {
+          const next = { ...c };
+          delete next[jobId];
+          return next;
+        });
+        await fetchJobs();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error ?? "Retake failed");
+      }
+    } catch {
+      alert("Retake failed");
+    } finally {
+      setRetakingId(null);
     }
   }
 
@@ -622,6 +673,17 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                         {cancellingId === j.id ? "Canceling…" : "Cancel"}
                       </button>
                     )}
+                    {j.status === JOB_STATUS.COMPLETED && (
+                      <button
+                        type="button"
+                        onClick={() => handleRetake(j.id)}
+                        disabled={retakingId === j.id}
+                        className="rounded border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                        title="Regenerar video con la misma foto"
+                      >
+                        {retakingId === j.id ? "Retake…" : "Retake"}
+                      </button>
+                    )}
                     {j.status === JOB_STATUS.FAILED && (
                       <button
                         type="button"
@@ -641,7 +703,16 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                       {detailsLoading === j.id ? (
                         <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading details…</p>
                       ) : (
-                        <JobDetailsPanel job={j} details={detailsCache[j.id]} />
+                        <JobDetailsPanel
+                          job={j}
+                          details={detailsCache[j.id]}
+                          onRetake={
+                            j.status === JOB_STATUS.COMPLETED
+                              ? () => handleRetake(j.id)
+                              : undefined
+                          }
+                          retaking={retakingId === j.id}
+                        />
                       )}
                     </td>
                   </tr>

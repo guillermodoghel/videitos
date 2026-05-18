@@ -24,8 +24,8 @@ Optional: `VERCEL_URL` is used by Vercel; if `HOSTNAME` is unset, the app may fa
 
 ## Concurrency and rate limits
 
-- **Per (user, model)** limits come from `getModelRateLimit(modelId)` and are enforced inside `processJob()` via a DB transaction (and Runway’s 1-concurrent rule). Multiple workflow runs can be started; the first step retries until it can claim a slot.
-- You can tune “how many at a time” by model in `src/lib/video-models.ts` (e.g. `requestsPerWindow`, `windowSeconds`).
+- **Per (user, model)** limits come from `getModelRateLimit(modelId)` and are enforced inside `processJob()` via a DB transaction (Runway concurrency via `maxConcurrent`, default 3). Multiple workflow runs can be started; the first step retries until it can claim a slot.
+- You can tune concurrency and throughput by model in `src/lib/video-models.ts` (`maxConcurrent`, `requestsPerWindow`, `windowSeconds`; see `RUNWAY_MAX_CONCURRENT_TASKS`).
 
 ## Observability
 

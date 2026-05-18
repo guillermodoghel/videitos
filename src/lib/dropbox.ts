@@ -6,6 +6,12 @@
 
 import { SignJWT, jwtVerify } from "jose";
 import { prisma } from "@/lib/prisma";
+import {
+  backoffMs,
+  DEFAULT_HTTP_MAX_RETRIES,
+  isRetryableHttpStatus,
+  sleep,
+} from "@/lib/http-retry";
 
 const DROPBOX_AUTH = "https://www.dropbox.com/oauth2/authorize";
 const STATE_JWT_ALG = "HS256";
@@ -312,36 +318,101 @@ function sanitizePathForHeader(path: string): string {
 /** pathOrId: file path (e.g. "/Folder/file.jpg") or file id (e.g. "id:xxxxx"). Using id avoids path encoding issues. */
 export async function downloadFile(
   accessToken: string,
-  pathOrId: string
+  pathOrId: string,
+  options: {
+    maxRetries?: number;
+    onUnauthorized?: () => Promise<string | null>;
+    logContext?: Record<string, unknown>;
+  } = {}
 ): Promise<Buffer | null> {
   const useId = pathOrId.startsWith("id:");
   const arg = useId ? pathOrId : sanitizePathForHeader(pathOrId);
   const apiArg = JSON.stringify({ path: arg });
-  const res = await fetch(`${DROPBOX_CONTENT}/files/download`, {
-    method: "POST",
-    headers: {
-      Authorization: toLatin1Header(`Bearer ${accessToken}`),
-      "Dropbox-API-Arg": toLatin1Header(apiArg),
-    },
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    let errJson: unknown;
+  const maxRetries = Math.max(0, options.maxRetries ?? DEFAULT_HTTP_MAX_RETRIES);
+  const logContext = {
+    ...options.logContext,
+    pathOrId: useId ? pathOrId : pathOrId.slice(0, 80) + (pathOrId.length > 80 ? "…" : ""),
+    useId,
+  };
+  let token = accessToken;
+  let didForceRefresh = false;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      errJson = JSON.parse(errText);
-    } catch {
-      errJson = errText;
+      const res = await fetch(`${DROPBOX_CONTENT}/files/download`, {
+        method: "POST",
+        headers: {
+          Authorization: toLatin1Header(`Bearer ${token}`),
+          "Dropbox-API-Arg": toLatin1Header(apiArg),
+        },
+      });
+
+      if (res.ok) {
+        return Buffer.from(await res.arrayBuffer());
+      }
+
+      const errText = await res.text();
+      let errJson: unknown;
+      try {
+        errJson = JSON.parse(errText);
+      } catch {
+        errJson = errText;
+      }
+      const requestId = res.headers.get("x-dropbox-request-id");
+      const retryAfter = res.headers.get("retry-after");
+      const isRetryable = isRetryableHttpStatus(res.status);
+
+      console.error("[Dropbox download] failed", {
+        ...logContext,
+        status: res.status,
+        attempt: attempt + 1,
+        maxAttempts: maxRetries + 1,
+        requestId,
+        retryAfter,
+        isRetryable,
+        error: errJson,
+      });
+
+      if (res.status === 401 && options.onUnauthorized && !didForceRefresh) {
+        didForceRefresh = true;
+        const refreshed = await options.onUnauthorized();
+        if (refreshed) {
+          console.log("[Dropbox download] token refresh OK — retrying", {
+            ...logContext,
+            attempt: attempt + 1,
+          });
+          token = refreshed;
+          continue;
+        }
+        return null;
+      }
+
+      if (!isRetryable || attempt === maxRetries) {
+        return null;
+      }
+
+      const waitMs = backoffMs(attempt, retryAfter);
+      console.error("[Dropbox download] backing off before retry", {
+        ...logContext,
+        nextAttempt: attempt + 2,
+        waitMs,
+      });
+      await sleep(waitMs);
+    } catch (err) {
+      const isLast = attempt === maxRetries;
+      console.error("[Dropbox download] network error", {
+        ...logContext,
+        attempt: attempt + 1,
+        maxAttempts: maxRetries + 1,
+        error: err instanceof Error ? err.message : String(err),
+        isLast,
+      });
+      if (isLast) return null;
+      await sleep(backoffMs(attempt, null));
     }
-    console.error("[Dropbox download] failed", {
-      status: res.status,
-      pathOrId: useId ? pathOrId : pathOrId.slice(0, 80) + (pathOrId.length > 80 ? "…" : ""),
-      useId,
-      error: errJson,
-    });
-    return null;
   }
-  const buf = await res.arrayBuffer();
-  return Buffer.from(buf);
+
+  return null;
 }
 
 /** pathOrId: file path or "id:xxxxx". Using id avoids path encoding issues. */
@@ -415,7 +486,7 @@ export async function uploadFile(
   } = {}
 ): Promise<{ path_display?: string } | null> {
   const safePath = sanitizePathForHeader(path.replace(/\/$/, ""));
-  const maxRetries = Math.max(0, options.maxRetries ?? 2);
+  const maxRetries = Math.max(0, options.maxRetries ?? DEFAULT_HTTP_MAX_RETRIES);
   const mode = options.mode ?? "add";
   const contentLengthBytes = body.byteLength;
   const logContext = options.logContext ?? {};
@@ -423,20 +494,35 @@ export async function uploadFile(
   let didForceRefresh = false;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const res = await fetch(`${DROPBOX_CONTENT}/files/upload`, {
-      method: "POST",
-      headers: {
-        Authorization: toLatin1Header(`Bearer ${token}`),
-        "Content-Type": "application/octet-stream",
-        "Dropbox-API-Arg": toLatin1Header(
-          JSON.stringify({
-            path: safePath,
-            mode,
-          })
-        ),
-      },
-      body: new Uint8Array(body),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${DROPBOX_CONTENT}/files/upload`, {
+        method: "POST",
+        headers: {
+          Authorization: toLatin1Header(`Bearer ${token}`),
+          "Content-Type": "application/octet-stream",
+          "Dropbox-API-Arg": toLatin1Header(
+            JSON.stringify({
+              path: safePath,
+              mode,
+            })
+          ),
+        },
+        body: new Uint8Array(body),
+      });
+    } catch (err) {
+      const isLast = attempt === maxRetries;
+      console.error("[Dropbox upload] network error", {
+        ...logContext,
+        attempt: attempt + 1,
+        maxAttempts: maxRetries + 1,
+        error: err instanceof Error ? err.message : String(err),
+        isLast,
+      });
+      if (isLast) return null;
+      await sleep(backoffMs(attempt, null));
+      continue;
+    }
     if (res.ok) return res.json();
 
     const errText = await res.text();
@@ -448,7 +534,7 @@ export async function uploadFile(
     }
     const requestId = res.headers.get("x-dropbox-request-id");
     const retryAfter = res.headers.get("retry-after");
-    const isRetryable = res.status === 429 || res.status >= 500;
+    const isRetryable = isRetryableHttpStatus(res.status);
     const parsed = parseDropboxUploadErrorForLog(errJson, errText);
     const baseLog = {
       ...logContext,
@@ -503,10 +589,7 @@ export async function uploadFile(
       });
       return null;
     }
-    const retryAfterSeconds = retryAfter ? Number(retryAfter) : NaN;
-    const waitMs = Number.isFinite(retryAfterSeconds)
-      ? Math.max(0, retryAfterSeconds * 1000)
-      : 500 * Math.pow(2, attempt);
+    const waitMs = backoffMs(attempt, retryAfter);
     console.error("[Dropbox upload] backing off before retry", {
       ...logContext,
       requestId,
@@ -514,7 +597,7 @@ export async function uploadFile(
       waitMs,
       isRetryable,
     });
-    await new Promise((resolve) => setTimeout(resolve, waitMs));
+    await sleep(waitMs);
   }
   console.error("[Dropbox upload] giving up (loop exit)", { ...logContext, contentLengthBytes, mode });
   return null;

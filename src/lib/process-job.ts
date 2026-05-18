@@ -8,7 +8,8 @@ import { prisma } from "@/lib/prisma";
 import { parseTemplateConfig, getModelRateLimit, isRunwayImageToVideoModel, RUNWAY_IMAGE_TO_VIDEO_IDS } from "@/lib/video-models";
 import { computeJobCost } from "@/lib/credits";
 import { getObjectBody, isS3Key, uploadPreGenOutputImage } from "@/lib/s3";
-import { getValidAccessToken, downloadFile } from "@/lib/dropbox";
+import { getValidAccessToken, getValidAccessTokenWithOptions, downloadFile } from "@/lib/dropbox";
+import { downloadRunwayVideo } from "@/lib/runway";
 import {
   startRunwayImageToVideo,
   aspectRatioToRunwayRatio,
@@ -20,6 +21,7 @@ import { getRunwayApiKeyForUser, usesPlatformKey } from "@/lib/runway-api-key";
 import { maybeAutoRecharge } from "@/lib/stripe";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
+import { jobLog, jobLogError } from "@/lib/job-log";
 
 export type ProcessJobResult =
   | { ok: true; operationName: string }
@@ -41,6 +43,9 @@ export async function processJob(
   options: ProcessJobOptions = {}
 ): Promise<ProcessJobResult> {
   const { skipRateLimit = false } = options;
+  const startedAt = Date.now();
+  jobLog("process", "started", { jobId, skipRateLimit });
+
   const job = await prisma.job.findUnique({
     where: { id: jobId },
     include: {
@@ -50,20 +55,39 @@ export async function processJob(
   });
 
   if (!job) {
-    console.log("[process-job] jobId=%s → Job not found", jobId);
+    jobLogError("process", "job not found", { jobId });
     return { ok: false, error: "Job not found" };
   }
+
+  jobLog("process", "job loaded", {
+    jobId,
+    status: job.status,
+    userId: job.userId,
+    templateId: job.templateId,
+    templateName: job.template.name,
+    model: job.template.model,
+    sourcePath: job.dropboxSourceFilePath,
+    hasSourceFileId: !!job.dropboxSourceFileId,
+    providerOperationId: job.providerOperationId,
+  });
+
   // Already sent or completed: let workflow proceed to polling (no loop)
   if (job.status === JOB_STATUS.PROCESSING && job.providerOperationId) {
-    console.log("[process-job] jobId=%s already processing → operationName=%s", jobId, job.providerOperationId);
+    jobLog("process", "already processing — resuming poll", {
+      jobId,
+      operationName: job.providerOperationId,
+    });
     return { ok: true, operationName: job.providerOperationId };
   }
   if (job.status === JOB_STATUS.COMPLETED) {
-    console.log("[process-job] jobId=%s already completed → operationName=%s", jobId, job.providerOperationId ?? "n/a");
+    jobLog("process", "already completed — resuming poll", {
+      jobId,
+      operationName: job.providerOperationId ?? null,
+    });
     return { ok: true, operationName: job.providerOperationId ?? "" };
   }
   if (job.status !== JOB_STATUS.QUEUED) {
-    console.log("[process-job] jobId=%s → Job not queued (status=%s)", jobId, job.status);
+    jobLogError("process", "invalid status for process", { jobId, status: job.status });
     return { ok: false, error: `Job not queued (status: ${job.status})` };
   }
 
@@ -74,6 +98,7 @@ export async function processJob(
 
   if (!skipRateLimit) {
     const limit = getModelRateLimit(modelId);
+    const maxConcurrent = limit.maxConcurrent ?? 1;
     const isRunwayModel = isRunwayImageToVideoModel(modelId);
     const windowStart = new Date(Date.now() - limit.windowSeconds * 1000);
     const RATE_LIMIT_CLAIM_RETRIES = 3;
@@ -84,7 +109,6 @@ export async function processJob(
           async (tx) => {
             if (isRunwayModel) {
               if (userHasKey) {
-                // Per-user: only one concurrent task per this user
                 const runwayInProgress = await tx.job.count({
                   where: {
                     userId: job.userId,
@@ -92,9 +116,8 @@ export async function processJob(
                     template: { model: { in: [...RUNWAY_IMAGE_TO_VIDEO_IDS] } },
                   },
                 });
-                if (runwayInProgress >= 1) throw new Error("rate_limit");
+                if (runwayInProgress >= maxConcurrent) throw new Error("rate_limit");
               } else {
-                // Platform key: one concurrent task across all users without key
                 const platformInProgress = await tx.job.count({
                   where: {
                     status: JOB_STATUS.PROCESSING,
@@ -102,7 +125,7 @@ export async function processJob(
                     template: { model: { in: [...RUNWAY_IMAGE_TO_VIDEO_IDS] } },
                   },
                 });
-                if (platformInProgress >= 1) throw new Error("rate_limit");
+                if (platformInProgress >= maxConcurrent) throw new Error("rate_limit");
               }
             }
             const windowWhere = {
@@ -136,19 +159,36 @@ export async function processJob(
           }
         );
         claimDone = true;
+        jobLog("process", "rate limit slot claimed", {
+          jobId,
+          model: modelId,
+          userHasKey,
+          usePlatformKey,
+          maxConcurrent,
+          requestsPerWindow: limit.requestsPerWindow,
+          windowSeconds: limit.windowSeconds,
+        });
       } catch (e) {
         const isRateLimit = e instanceof Error && e.message === "rate_limit";
         const isSerialization =
           e && typeof e === "object" && "code" in e && (e as { code: string }).code === "P2034";
         if (isRateLimit) {
-          console.log("[process-job] jobId=%s → rate_limit (slot claimed by another or window full)", jobId);
+          jobLog("process", "rate limited — will retry", {
+            jobId,
+            attempt: attempt + 1,
+            reason: "slot_or_window",
+          });
           return { ok: false, error: "rate_limit" };
         }
         if (isSerialization && attempt < RATE_LIMIT_CLAIM_RETRIES - 1) {
+          jobLog("process", "serialization conflict — retrying claim", {
+            jobId,
+            attempt: attempt + 1,
+          });
           continue;
         }
         if (isSerialization) {
-          console.log("[process-job] jobId=%s → rate_limit (serialization retries exhausted)", jobId);
+          jobLog("process", "rate limited — serialization retries exhausted", { jobId });
           return { ok: false, error: "rate_limit" };
         }
         throw e;
@@ -206,6 +246,12 @@ export async function processJob(
       return { ok: false, error: "Dropbox not connected" };
     }
 
+    const dropboxDownloadOptions = {
+      onUnauthorized: () =>
+        getValidAccessTokenWithOptions(job.userId, { forceRefresh: true }),
+      logContext: { source: "process-job", jobId },
+    };
+
     let promptImage: string;
 
     const preGen = config.preGen;
@@ -223,8 +269,13 @@ export async function processJob(
           ? job.dropboxSourceFileId
           : `id:${job.dropboxSourceFileId}`
         : job.dropboxSourceFilePath;
-      const dropboxImageBuf = await downloadFile(token, sourcePathOrId);
+      jobLog("process", "downloading source image (pre-gen path)", { jobId, sourcePathOrId });
+      const dropboxImageBuf = await downloadFile(token, sourcePathOrId, dropboxDownloadOptions);
       if (dropboxImageBuf) {
+        jobLog("process", "source image downloaded (pre-gen path)", {
+          jobId,
+          bytes: dropboxImageBuf.byteLength,
+        });
         const ext = job.dropboxSourceFilePath.split(".").pop()?.toLowerCase() ?? "jpg";
         const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
         refUris.push({
@@ -245,7 +296,11 @@ export async function processJob(
         where: { id: job.id },
         data: { status: JOB_STATUS.PROCESSING },
       });
-      console.log("[process-job] jobId=%s → Pre-gen: text-to-image (%s refs, character from Dropbox)", jobId, refUris.length);
+      jobLog("process", "pre-gen text-to-image starting", {
+        jobId,
+        refCount: refUris.length,
+        hasCharacterFromDropbox: refUris.some((r) => r.tag === "character"),
+      });
       const imageToVideoRatio = config.runwayRatio ?? aspectRatioToRunwayRatio(config.aspectRatio);
       const preGenRatio: RunwayTextToImageRatio =
         imageToVideoRatio === "1280:720" || imageToVideoRatio === "720:1280"
@@ -273,12 +328,11 @@ export async function processJob(
         return { ok: false, error: preGenResult.error };
       }
       promptImage = preGenResult.imageUri;
-      const imageRes = await fetch(preGenResult.imageUri);
-      if (imageRes.ok) {
-        const imageBuf = Buffer.from(await imageRes.arrayBuffer());
-        const contentType = imageRes.headers.get("content-type") ?? "image/png";
-        const mime = contentType.includes("png") ? "image/png" : "image/jpeg";
-        const key = await uploadPreGenOutputImage(job.userId, job.id, imageBuf, mime);
+      const imageBuf = await downloadRunwayVideo(apiKey, preGenResult.imageUri, {
+        logContext: { source: "process-job", jobId, step: "preGenImage" },
+      });
+      if (imageBuf) {
+        const key = await uploadPreGenOutputImage(job.userId, job.id, imageBuf, "image/png");
         if (key) {
           await prisma.job.update({
             where: { id: job.id },
@@ -286,16 +340,17 @@ export async function processJob(
           });
         }
       }
-      console.log("[process-job] jobId=%s → Pre-gen done, using image as first frame", jobId);
+      jobLog("process", "pre-gen complete", { jobId, hasPreGenImageKey: !!imageBuf });
     } else {
       const sourcePathOrId = job.dropboxSourceFileId
         ? job.dropboxSourceFileId.startsWith("id:")
           ? job.dropboxSourceFileId
           : `id:${job.dropboxSourceFileId}`
         : job.dropboxSourceFilePath;
-      const newImageBuf = await downloadFile(token, sourcePathOrId);
+      jobLog("process", "downloading source image", { jobId, sourcePathOrId });
+      const newImageBuf = await downloadFile(token, sourcePathOrId, dropboxDownloadOptions);
       if (!newImageBuf) {
-        console.log("[process-job] jobId=%s → Failed to download source image from Dropbox", jobId);
+        jobLogError("process", "source image download failed", { jobId, sourcePathOrId });
         await prisma.job.update({
           where: { id: job.id },
             data: { status: JOB_STATUS.FAILED, errorMessage: "Failed to download source image from Dropbox", completedAt: new Date() },
@@ -304,9 +359,17 @@ export async function processJob(
       }
       const ext = job.dropboxSourceFilePath.split(".").pop()?.toLowerCase() ?? "jpg";
       const newMime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+      jobLog("process", "source image downloaded", { jobId, bytes: newImageBuf.byteLength, mime: newMime });
       promptImage = `data:${newMime};base64,${newImageBuf.toString("base64")}`;
     }
     const ratio = config.runwayRatio ?? aspectRatioToRunwayRatio(config.aspectRatio);
+    jobLog("process", "submitting to Runway image-to-video", {
+      jobId,
+      model: modelId,
+      ratio,
+      durationSeconds: config.durationSeconds,
+      hasPreGenPath: !!(preGen?.prompt?.trim() && preGen.referenceImageUrls?.length),
+    });
     const result = await startRunwayImageToVideo(apiKey, {
       model: modelId as RunwayImageToVideoModel,
       promptText: config.prompt,
@@ -334,7 +397,11 @@ export async function processJob(
         sentAt: new Date(),
       },
     });
-    console.log("[process-job] jobId=%s → processing (Runway) taskId=%s", jobId, result.taskId);
+    jobLog("process", "submitted to Runway — now processing", {
+      jobId,
+      taskId: result.taskId,
+      elapsedMs: Date.now() - startedAt,
+    });
     return { ok: true, operationName: result.taskId };
   }
 

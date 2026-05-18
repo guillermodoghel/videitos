@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { jobLog, jobLogError } from "@/lib/job-log";
 import { getRunwayTaskStatus } from "@/lib/runway";
 import { isRunwayImageToVideoModel } from "@/lib/video-models";
 import { getRunwayApiKeyForUser } from "@/lib/runway-api-key";
@@ -19,6 +20,8 @@ export async function POST(request: NextRequest) {
   const operationName = body.operationName;
   const jobId = body.jobId;
 
+  jobLog("status", "request received", { jobId: jobId ?? null, operationName: operationName ?? null });
+
   if (!operationName || typeof operationName !== "string") {
     return NextResponse.json(
       { error: "operationName required" },
@@ -35,6 +38,12 @@ export async function POST(request: NextRequest) {
     });
     if (job) {
       isRunway = isRunwayImageToVideoModel(job.template.model);
+      jobLog("status", "job resolved", {
+        jobId,
+        model: job.template.model,
+        isRunway,
+        userId: job.userId,
+      });
       if (isRunway) {
         const user = await prisma.user.findUnique({
           where: { id: job.userId },
@@ -46,6 +55,7 @@ export async function POST(request: NextRequest) {
   }
 
   if (!isRunway || !apiKey) {
+    jobLogError("status", "unsupported or missing API key", { jobId, operationName, isRunway, hasApiKey: !!apiKey });
     return NextResponse.json(
       { done: true, error: "Unsupported model or missing Runway API key" },
       { status: 200 }
@@ -53,11 +63,20 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    const startedAt = Date.now();
     const status = await getRunwayTaskStatus(apiKey, operationName);
+    jobLog("status", "Runway task status", {
+      jobId,
+      operationName,
+      done: status.done,
+      hasVideoUri: !!status.videoUri,
+      error: status.error ?? null,
+      elapsedMs: Date.now() - startedAt,
+    });
     return NextResponse.json(status);
   } catch (e) {
     const err = e instanceof Error ? e : new Error(String(e));
-    console.error("[job-status] unexpected error", {
+    jobLogError("status", "unexpected error", {
       jobId,
       operationName,
       message: err.message,

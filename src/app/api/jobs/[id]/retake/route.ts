@@ -5,8 +5,8 @@ import { rerunJob } from "@/lib/rerun-job";
 import { USER_ROLE } from "@/lib/constants/user-role";
 
 /**
- * POST /api/jobs/[id]/retry
- * Reset a failed job (including canceled) to queued and start the workflow.
+ * POST /api/jobs/[id]/retake
+ * Re-run a completed job with the same source image (new video output).
  */
 export async function POST(
   _request: NextRequest,
@@ -31,7 +31,7 @@ export async function POST(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const result = await rerunJob(jobId, "retry");
+  const result = await rerunJob(jobId, "retake");
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status });
   }

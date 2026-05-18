@@ -14,6 +14,7 @@ export interface RunwayTaskStatus {
 }
 
 import type { RunwayRatio } from "@/lib/video-models";
+import { downloadUrlWithRetries, type DownloadUrlOptions } from "@/lib/http-retry";
 
 /** Map Veo aspect ratio to Runway ratio (image-to-video accepted values). */
 export function aspectRatioToRunwayRatio(
@@ -140,16 +141,13 @@ export async function getRunwayTaskStatus(
  */
 export async function downloadRunwayVideo(
   _apiKey: string,
-  videoUri: string
+  videoUri: string,
+  options: DownloadUrlOptions = {}
 ): Promise<Buffer | null> {
-  try {
-    const res = await fetch(videoUri, { method: "GET" });
-    if (!res.ok) return null;
-    const buf = await res.arrayBuffer();
-    return Buffer.from(buf);
-  } catch {
-    return null;
-  }
+  return downloadUrlWithRetries(videoUri, {
+    ...options,
+    logLabel: options.logLabel ?? "[Runway download]",
+  });
 }
 
 /** Ratio for text_to_image gen4_image_turbo (subset used for consistency with video). */

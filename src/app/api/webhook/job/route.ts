@@ -12,6 +12,7 @@ import { JOB_STATUS } from "@/lib/constants/job-status";
 import { WEBHOOK_JOB_STATUS } from "@/lib/constants/webhook-job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 import { CREDIT_KIND } from "@/lib/constants/credit-transaction-kind";
+import { jobLog, jobLogError } from "@/lib/job-log";
 
 /**
  * POST /api/webhook/job
@@ -40,12 +41,26 @@ export async function POST(request: NextRequest) {
   const operationName = body.operationName;
   const jobId = body.jobId;
 
+  jobLog("webhook", "request received", {
+    status,
+    jobId: jobId ?? null,
+    operationName: operationName ?? null,
+    hasVideoUri: !!videoUri,
+    error: errorMsg ?? null,
+  });
+
   if (status === WEBHOOK_JOB_STATUS.ERROR) {
     const job = await findJob(jobId, operationName);
     if (job) {
       if (job.errorMessage === JOB_ERROR.CANCELED) {
+        jobLog("webhook", "error ignored — job was canceled", { jobId: job.id });
         return NextResponse.json({ ok: true });
       }
+      jobLogError("webhook", "marking job failed", {
+        jobId: job.id,
+        error: errorMsg ?? "Unknown error",
+        previousStatus: job.status,
+      });
       await prisma.job.update({
         where: { id: job.id },
         data: {
@@ -67,6 +82,7 @@ export async function POST(request: NextRequest) {
 
   const job = await findJob(jobId, operationName);
   if (!job) {
+    jobLogError("webhook", "ready callback — job not found", { jobId, operationName });
     return NextResponse.json(
       { error: "Job not found" },
       { status: 404 }
@@ -78,8 +94,24 @@ export async function POST(request: NextRequest) {
     job.status !== JOB_STATUS.PROCESSING ||
     (operationName && job.providerOperationId !== operationName)
   ) {
+    jobLog("webhook", "ready callback ignored (stale or canceled)", {
+      jobId: job.id,
+      jobStatus: job.status,
+      jobOperationId: job.providerOperationId,
+      callbackOperationId: operationName ?? null,
+      canceled: job.errorMessage === JOB_ERROR.CANCELED,
+    });
     return NextResponse.json({ ok: true });
   }
+
+  jobLog("webhook", "processing ready callback", {
+    jobId: job.id,
+    userId: job.userId,
+    templateId: job.templateId,
+    operationName,
+    sourcePath: job.dropboxSourceFilePath,
+    hasPreGen: !!job.preGenImageKey,
+  });
 
   const [user, template] = await Promise.all([
     prisma.user.findUnique({
@@ -123,8 +155,33 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No destination path" }, { status: 500 });
   }
 
-  const videoBuffer = await downloadRunwayVideo(apiKey, videoUri);
+  let videoUriHost: string | null = null;
+  try {
+    videoUriHost = new URL(videoUri).hostname;
+  } catch {
+    videoUriHost = null;
+  }
+
+  jobLog("webhook", "downloading video from Runway", {
+    jobId: job.id,
+    videoUriHost,
+    videoUriLength: videoUri.length,
+  });
+  const downloadStartedAt = Date.now();
+  const videoBuffer = await downloadRunwayVideo(apiKey, videoUri, {
+    logContext: {
+      source: "webhook/job",
+      jobId: job.id,
+      userId: job.userId,
+      templateId: job.templateId,
+      videoUriHost,
+    },
+  });
   if (!videoBuffer) {
+    jobLogError("webhook", "Runway video download failed", {
+      jobId: job.id,
+      elapsedMs: Date.now() - downloadStartedAt,
+    });
     await prisma.job.update({
       where: { id: job.id },
       data: {
@@ -136,8 +193,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Download failed" }, { status: 500 });
   }
 
+  jobLog("webhook", "Runway video downloaded", {
+    jobId: job.id,
+    bytes: videoBuffer.byteLength,
+    elapsedMs: Date.now() - downloadStartedAt,
+  });
+
   const token = await getValidAccessToken(job.userId);
   if (!token) {
+    jobLogError("webhook", "Dropbox not connected", { jobId: job.id, userId: job.userId });
     await prisma.job.update({
       where: { id: job.id },
       data: {
@@ -154,18 +218,17 @@ export async function POST(request: NextRequest) {
   const outputFileName = `${baseName}-${Date.now()}.mp4`;
   const outputPath = destPath.endsWith("/") ? `${destPath}${outputFileName}` : `${destPath}/${outputFileName}`;
 
-  let videoUriHost: string | null = null;
-  try {
-    videoUriHost = new URL(videoUri).hostname;
-  } catch {
-    videoUriHost = null;
-  }
-
+  jobLog("webhook", "uploading video to Dropbox", {
+    jobId: job.id,
+    outputPath,
+    bytes: videoBuffer.byteLength,
+    destinationFolder: destPath,
+  });
+  const uploadStartedAt = Date.now();
   const uploadResult = await uploadFile(token, outputPath, videoBuffer, {
     mode: "add",
     onUnauthorized: () =>
       getValidAccessTokenWithOptions(job.userId, { forceRefresh: true }),
-    maxRetries: 2,
     logContext: {
       source: "webhook/job",
       jobId: job.id,
@@ -183,6 +246,11 @@ export async function POST(request: NextRequest) {
     },
   });
   if (!uploadResult) {
+    jobLogError("webhook", "Dropbox upload failed", {
+      jobId: job.id,
+      outputPath,
+      elapsedMs: Date.now() - uploadStartedAt,
+    });
     console.error("[webhook/job] Dropbox upload failed after uploadFile returned null", {
       jobId: job.id,
       userId: job.userId,
@@ -223,6 +291,14 @@ export async function POST(request: NextRequest) {
   const apiCost = usePlatform ? computed.apiCost : 0;
   const creditCost = usePlatform ? computed.creditCost : 0;
 
+  jobLog("webhook", "Dropbox upload succeeded", {
+    jobId: job.id,
+    outputPath: uploadResult.path_display ?? outputPath,
+    elapsedMs: Date.now() - uploadStartedAt,
+    deductCredits,
+    creditCost: deductCredits ? creditCost : 0,
+  });
+
   await prisma.$transaction(async (tx) => {
     if (deductCredits) {
       await tx.user.update({
@@ -254,9 +330,18 @@ export async function POST(request: NextRequest) {
   // Fire-and-forget auto-recharge check after credits deducted
   if (deductCredits) {
     maybeAutoRecharge(job.userId).catch((err) =>
-      console.error("[webhook/job] auto-recharge error:", err)
+      jobLogError("webhook", "auto-recharge error", {
+        jobId: job.id,
+        error: err instanceof Error ? err.message : String(err),
+      })
     );
   }
+
+  jobLog("webhook", "job completed", {
+    jobId: job.id,
+    outputDropboxPath: uploadResult.path_display ?? outputPath,
+    creditCost: deductCredits ? creditCost : 0,
+  });
 
   return NextResponse.json({ ok: true, outputDropboxPath: outputPath });
 }

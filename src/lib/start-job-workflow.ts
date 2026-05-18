@@ -5,6 +5,7 @@
 
 import { start } from "workflow/api";
 import { jobWorkflow } from "@/workflows/job-workflow";
+import { jobLog, jobLogError } from "@/lib/job-log";
 
 export async function startJobWorkflow(params: {
   jobId: string;
@@ -12,11 +13,16 @@ export async function startJobWorkflow(params: {
 }): Promise<boolean> {
   const { jobId, callbackBaseUrl } = params;
   const base = callbackBaseUrl.replace(/\/$/, "");
+  jobLog("start", "starting workflow", { jobId, callbackBaseUrl: base });
   try {
     await start(jobWorkflow, [jobId, base]);
+    jobLog("start", "workflow started", { jobId });
     return true;
   } catch (err) {
-    console.error("[startJobWorkflow] start failed:", err);
+    jobLogError("start", "workflow start failed", {
+      jobId,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return false;
   }
 }

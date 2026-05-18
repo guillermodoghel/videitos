@@ -3,12 +3,17 @@
  * Based on: https://ai.google.dev/gemini-api/docs/video
  */
 
+/** Max simultaneous Runway image-to-video tasks (Runway account limit). */
+export const RUNWAY_MAX_CONCURRENT_TASKS = 3;
+
 /** Per-model rate limit: N requests per window (e.g. 2 per 60s). */
 export interface ModelRateLimit {
   /** Max requests allowed in the window. */
   requestsPerWindow: number;
   /** Window duration in seconds. */
   windowSeconds: number;
+  /** Max jobs in PROCESSING at once for Runway models. Defaults to 1 if omitted. */
+  maxConcurrent?: number;
 }
 
 export const RUNWAY_IMAGE_TO_VIDEO_IDS = ["gen4.5", "gen4_turbo", "veo3.1", "veo3.1_fast"] as const;
@@ -37,8 +42,9 @@ export const VIDEO_MODELS = [
     name: "Gen-4.5",
     description: "Image-to-video from Dropbox source image (no reference images)",
     rateLimit: {
-      requestsPerWindow: 1,
+      requestsPerWindow: RUNWAY_MAX_CONCURRENT_TASKS,
       windowSeconds: 1,
+      maxConcurrent: RUNWAY_MAX_CONCURRENT_TASKS,
     } satisfies ModelRateLimit,
   },
   {
@@ -46,8 +52,9 @@ export const VIDEO_MODELS = [
     name: "Gen-4 Turbo",
     description: "Image-to-video from Dropbox source image (no reference images)",
     rateLimit: {
-      requestsPerWindow: 1,
+      requestsPerWindow: RUNWAY_MAX_CONCURRENT_TASKS,
       windowSeconds: 1,
+      maxConcurrent: RUNWAY_MAX_CONCURRENT_TASKS,
     } satisfies ModelRateLimit,
   },
   {
@@ -55,8 +62,9 @@ export const VIDEO_MODELS = [
     name: "Veo 3.1",
     description: "Image-to-video from Dropbox source image (4/6/8s)",
     rateLimit: {
-      requestsPerWindow: 1,
+      requestsPerWindow: RUNWAY_MAX_CONCURRENT_TASKS,
       windowSeconds: 1,
+      maxConcurrent: RUNWAY_MAX_CONCURRENT_TASKS,
     } satisfies ModelRateLimit,
   },
   {
@@ -64,8 +72,9 @@ export const VIDEO_MODELS = [
     name: "Veo 3.1 Fast",
     description: "Image-to-video from Dropbox source image (4/6/8s, optional audio)",
     rateLimit: {
-      requestsPerWindow: 1,
+      requestsPerWindow: RUNWAY_MAX_CONCURRENT_TASKS,
       windowSeconds: 1,
+      maxConcurrent: RUNWAY_MAX_CONCURRENT_TASKS,
     } satisfies ModelRateLimit,
   },
 ] as const;

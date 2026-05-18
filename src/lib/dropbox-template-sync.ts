@@ -7,6 +7,7 @@ import {
 } from "@/lib/dropbox";
 import { isUnderDropboxSourcePath } from "@/lib/dropbox-path";
 import { startJobWorkflow } from "@/lib/start-job-workflow";
+import { jobLog } from "@/lib/job-log";
 
 type ListFolderEntry = {
   ".tag"?: string;
@@ -79,11 +80,13 @@ export async function syncTemplateFromDropbox(
       });
       if (existing) continue;
 
-      console.log("[Dropbox webhook] New file:", {
+      jobLog("ingest", "new file detected", {
         name: filename,
         path: sourceFilePath,
-        fileId: fileId ?? "none",
-        template: template.name,
+        fileId: fileId ?? null,
+        templateId: template.id,
+        templateName: template.name,
+        userId,
       });
       const job = await prisma.job.create({
         data: {
@@ -99,10 +102,11 @@ export async function syncTemplateFromDropbox(
         jobId: job.id,
         callbackBaseUrl: host.replace(/\/$/, ""),
       }).catch((err) => console.error("[Dropbox webhook] Start job workflow failed:", err));
-      console.log("[Dropbox webhook] Job created and workflow started", {
+      jobLog("ingest", "job created and workflow started", {
         jobId: job.id,
         templateName: template.name,
         model: template.model,
+        userId,
       });
       jobsCreated += 1;
     }
