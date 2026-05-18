@@ -36,12 +36,21 @@ export async function GET(
     },
     include: {
       template: { select: { config: true } },
-      outputHistory: { orderBy: { version: "desc" } },
     },
   });
 
   if (!job) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  let archivedOutputs: Awaited<ReturnType<typeof prisma.jobOutput.findMany>> = [];
+  try {
+    archivedOutputs = await prisma.jobOutput.findMany({
+      where: { jobId: job.id },
+      orderBy: { version: "desc" },
+    });
+  } catch {
+    // JobOutput table may be missing until migrations are applied
   }
 
   const config = job.template.config as { referenceImageUrls?: string[] } | null;
@@ -73,8 +82,8 @@ export async function GET(
 
   if (job.status === JOB_STATUS.COMPLETED && (job.outputDropboxPath || outputVideoUrl)) {
     const currentVersion =
-      job.outputHistory.length > 0
-        ? Math.max(...job.outputHistory.map((o) => o.version)) + 1
+      archivedOutputs.length > 0
+        ? Math.max(...archivedOutputs.map((o) => o.version)) + 1
         : 1;
     outputHistory.push({
       version: currentVersion,
@@ -85,7 +94,7 @@ export async function GET(
     });
   }
 
-  for (const archived of job.outputHistory) {
+  for (const archived of archivedOutputs) {
     const url = await resolveJobOutputVideoUrl(job.userId, {
       outputVideoS3Key: archived.outputVideoS3Key,
       outputDropboxPath: archived.outputDropboxPath,
