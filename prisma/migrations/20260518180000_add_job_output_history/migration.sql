@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "videitos"."JobOutput" (
+CREATE TABLE IF NOT EXISTS "videitos"."JobOutput" (
     "id" TEXT NOT NULL,
     "jobId" TEXT NOT NULL,
     "version" INTEGER NOT NULL,
@@ -16,10 +16,21 @@ CREATE TABLE "videitos"."JobOutput" (
 );
 
 -- CreateIndex
-CREATE INDEX "JobOutput_jobId_idx" ON "videitos"."JobOutput"("jobId");
+CREATE INDEX IF NOT EXISTS "JobOutput_jobId_idx" ON "videitos"."JobOutput"("jobId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "JobOutput_jobId_version_key" ON "videitos"."JobOutput"("jobId", "version");
+CREATE UNIQUE INDEX IF NOT EXISTS "JobOutput_jobId_version_key" ON "videitos"."JobOutput"("jobId", "version");
 
--- AddForeignKey
-ALTER TABLE "videitos"."JobOutput" ADD CONSTRAINT "JobOutput_jobId_fkey" FOREIGN KEY ("jobId") REFERENCES "videitos"."Job"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+-- AddForeignKey (skip if already present)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'JobOutput_jobId_fkey'
+  ) THEN
+    ALTER TABLE "videitos"."JobOutput"
+      ADD CONSTRAINT "JobOutput_jobId_fkey"
+      FOREIGN KEY ("jobId") REFERENCES "videitos"."Job"("id")
+      ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
