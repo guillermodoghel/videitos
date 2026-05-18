@@ -20,7 +20,7 @@ type JobRow = {
   preGenImageKey: string | null;
   errorMessage: string | null;
   workflowPhase: string | null;
-  hasStoredRunwayVideo: boolean;
+  canRetryDropboxUpload: boolean;
   apiCost: number | null;
   creditCost: number | null;
   createdAt: string;
@@ -66,14 +66,6 @@ function statusLabel(
     [JOB_STATUS.SENT_TO_VEO]: "Processing", // legacy
   };
   return labels[status] ?? status;
-}
-
-function canRetryDropboxUpload(job: JobRow): boolean {
-  return (
-    job.status === JOB_STATUS.FAILED &&
-    job.errorMessage === JOB_ERROR.DROPBOX_UPLOAD_FAILED &&
-    job.hasStoredRunwayVideo
-  );
 }
 
 function statusColor(
@@ -797,7 +789,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                         {retakingId === j.id ? "Retake…" : "Retake"}
                       </button>
                     )}
-                    {j.status === JOB_STATUS.FAILED && canRetryDropboxUpload(j) && (
+                    {j.status === JOB_STATUS.FAILED && j.canRetryDropboxUpload && (
                       <button
                         type="button"
                         onClick={() => handleRetryDropboxUpload(j.id)}
@@ -808,7 +800,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                         {retryingDropboxId === j.id ? "Uploading…" : "Retry Dropbox upload"}
                       </button>
                     )}
-                    {j.status === JOB_STATUS.FAILED && !canRetryDropboxUpload(j) && (
+                    {j.status === JOB_STATUS.FAILED && !j.canRetryDropboxUpload && (
                       <button
                         type="button"
                         onClick={() => handleRetry(j.id)}

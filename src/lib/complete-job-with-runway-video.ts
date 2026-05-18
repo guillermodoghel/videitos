@@ -24,6 +24,7 @@ import {
   pendingJobVideoKey,
 } from "@/lib/s3";
 import { persistRunwayVideoUri } from "@/lib/persist-runway-video-uri";
+import { resolveRunwayVideoUriForJob } from "@/lib/resolve-runway-video-uri";
 
 export type CompleteJobWithRunwayVideoResult =
   | { outcome: "completed"; outputDropboxPath: string }
@@ -92,11 +93,11 @@ function sanitizeOutputFileBaseName(input: string): string {
 
 export async function completeJobWithRunwayVideo(params: {
   jobId: string;
-  videoUri: string;
+  videoUri?: string | null;
   operationName?: string | null;
   source?: string;
 }): Promise<CompleteJobWithRunwayVideoResult> {
-  const { jobId, videoUri, operationName, source = "complete-job" } = params;
+  const { jobId, videoUri: videoUriParam, operationName, source = "complete-job" } = params;
 
   const job = await prisma.job.findUnique({
     where: { id: jobId },
@@ -107,6 +108,7 @@ export async function completeJobWithRunwayVideo(params: {
       status: true,
       errorMessage: true,
       providerOperationId: true,
+      runwayOutputVideoUri: true,
       outputDropboxPath: true,
       dropboxSourceFilePath: true,
       preGenImageKey: true,
@@ -117,7 +119,7 @@ export async function completeJobWithRunwayVideo(params: {
     return { outcome: "failed", error: "Job not found" };
   }
 
-  await persistRunwayVideoUri(jobId, videoUri);
+  let videoUri = videoUriParam ?? job.runwayOutputVideoUri;
 
   const decision = getReadyCallbackDecision(job, operationName);
   if (!decision.proceed) {
@@ -189,10 +191,13 @@ export async function completeJobWithRunwayVideo(params: {
   }
 
   let videoUriHost: string | null = null;
-  try {
-    videoUriHost = new URL(videoUri).hostname;
-  } catch {
-    videoUriHost = null;
+  if (videoUri) {
+    try {
+      videoUriHost = new URL(videoUri).hostname;
+    } catch {
+      videoUriHost = null;
+    }
+    await persistRunwayVideoUri(jobId, videoUri);
   }
 
   const pendingKey = pendingJobVideoKey(job.userId, job.id);
@@ -204,7 +209,30 @@ export async function completeJobWithRunwayVideo(params: {
       bytes: videoBuffer.byteLength,
       source,
     });
+    if (!videoUri) {
+      videoUri = await resolveRunwayVideoUriForJob(jobId);
+      if (videoUri) {
+        try {
+          videoUriHost = new URL(videoUri).hostname;
+        } catch {
+          videoUriHost = null;
+        }
+      }
+    }
   } else {
+    if (!videoUri) {
+      videoUri = await resolveRunwayVideoUriForJob(jobId);
+    }
+    if (!videoUri) {
+      return { outcome: "failed", error: "No Runway video URL available" };
+    }
+    await persistRunwayVideoUri(jobId, videoUri);
+    try {
+      videoUriHost = new URL(videoUri).hostname;
+    } catch {
+      videoUriHost = null;
+    }
+
     jobLog("complete", "downloading video from Runway", {
       jobId: job.id,
       videoUriHost,
@@ -281,16 +309,18 @@ export async function completeJobWithRunwayVideo(params: {
         dropboxSourceFilePath: job.dropboxSourceFilePath,
         hasPreGenImage: !!job.preGenImageKey,
         videoBufferBytes: videoBuffer.byteLength,
-        videoUriLength: videoUri.length,
-        videoUriHost,
+        videoUriLength: videoUri?.length ?? 0,
+        videoUriHost: videoUriHost ?? null,
       },
     });
   } catch (err) {
     if (isDropboxRateLimitError(err)) {
-      await prisma.job.update({
-        where: { id: job.id },
-        data: { runwayOutputVideoUri: videoUri },
-      });
+      if (videoUri) {
+        await prisma.job.update({
+          where: { id: job.id },
+          data: { runwayOutputVideoUri: videoUri },
+        });
+      }
       jobLog("complete", "Dropbox rate limited — deferring retry", {
         jobId: job.id,
         retryAfterSeconds: err.retryAfterSeconds,
@@ -307,7 +337,7 @@ export async function completeJobWithRunwayVideo(params: {
       data: {
         status: JOB_STATUS.FAILED,
         errorMessage: JOB_ERROR.DROPBOX_UPLOAD_FAILED,
-        runwayOutputVideoUri: videoUri,
+        runwayOutputVideoUri: videoUri ?? null,
         workflowPhase: null,
         completedAt: new Date(),
       },

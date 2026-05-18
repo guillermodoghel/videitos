@@ -6,6 +6,7 @@ import { JOB_STATUS } from "@/lib/constants/job-status";
 import { USER_ROLE } from "@/lib/constants/user-role";
 import { reconcileStuckProcessingJobs } from "@/lib/reconcile-stuck-jobs";
 import { releaseStaleRunwayClaims } from "@/lib/release-stale-runway-claims";
+import { jobCanRetryDropboxUpload } from "@/lib/resolve-runway-video-uri";
 
 const DEFAULT_PER_PAGE = 10;
 const MIN_PER_PAGE = 5;
@@ -102,7 +103,12 @@ export async function GET(request: NextRequest) {
     preGenImageKey: j.preGenImageKey ?? null,
     errorMessage: j.errorMessage,
     workflowPhase: j.workflowPhase,
-    hasStoredRunwayVideo: !!j.runwayOutputVideoUri,
+    canRetryDropboxUpload: jobCanRetryDropboxUpload({
+      status: j.status,
+      errorMessage: j.errorMessage,
+      runwayOutputVideoUri: j.runwayOutputVideoUri,
+      providerOperationId: j.providerOperationId,
+    }),
     apiCost: j.apiCost != null ? Number(j.apiCost) : null,
     creditCost: j.creditCost != null ? Number(j.creditCost) : null,
     createdAt: j.createdAt.toISOString(),

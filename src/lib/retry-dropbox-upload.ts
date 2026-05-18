@@ -3,6 +3,8 @@ import { JOB_STATUS } from "@/lib/constants/job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 import { JOB_WORKFLOW_PHASE } from "@/lib/constants/job-workflow-phase";
 import { completeJobWithRunwayVideo } from "@/lib/complete-job-with-runway-video";
+import { resolveRunwayVideoUriForJob, jobCanRetryDropboxUpload } from "@/lib/resolve-runway-video-uri";
+import { getObjectBody, pendingJobVideoKey } from "@/lib/s3";
 import { jobLog, jobLogError } from "@/lib/job-log";
 
 export type RetryDropboxUploadResult =
@@ -40,22 +42,22 @@ export async function retryDropboxUploadForJob(
     return { ok: false, error: "Forbidden", status: 403 };
   }
 
-  const videoUri = job.runwayOutputVideoUri;
-  if (!videoUri) {
+  const pendingKey = pendingJobVideoKey(job.userId, job.id);
+  const hasS3 = !!(await getObjectBody(pendingKey));
+  if (!jobCanRetryDropboxUpload(job) && !hasS3) {
     return {
       ok: false,
-      error: "No stored Runway video URL for this job. Retry full job instead.",
+      error: `Job cannot retry Dropbox upload (status: ${job.status})`,
       status: 400,
     };
   }
 
-  const canRetry =
-    job.status === JOB_STATUS.FAILED &&
-    job.errorMessage === JOB_ERROR.DROPBOX_UPLOAD_FAILED;
-  if (!canRetry) {
+  const videoUri = await resolveRunwayVideoUriForJob(jobId);
+  if (!videoUri && !hasS3) {
     return {
       ok: false,
-      error: `Job cannot retry Dropbox upload (status: ${job.status})`,
+      error:
+        "Could not recover Runway video (URL expired or task unavailable). Use Retry to regenerate.",
       status: 400,
     };
   }
@@ -78,7 +80,7 @@ export async function retryDropboxUploadForJob(
 
   const result = await completeJobWithRunwayVideo({
     jobId,
-    videoUri,
+    videoUri: videoUri ?? undefined,
     operationName: job.providerOperationId,
     source: "retry-dropbox-upload",
   });
