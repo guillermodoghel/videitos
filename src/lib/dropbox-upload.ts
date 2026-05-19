@@ -45,6 +45,26 @@ function dropboxWriteMode(mode: "add" | "overwrite"): { ".tag": "add" | "overwri
   return { ".tag": mode };
 }
 
+function buildSimpleUploadArg(
+  safePath: string,
+  mode: "add" | "overwrite",
+  autorename: boolean
+): string {
+  return JSON.stringify({
+    path: safePath,
+    mode: dropboxWriteMode(mode),
+    autorename,
+  });
+}
+
+function buildSessionCommitArg(
+  safePath: string,
+  mode: "add" | "overwrite",
+  autorename: boolean
+): { path: string; mode: { ".tag": "add" | "overwrite" }; autorename: boolean } {
+  return { path: safePath, mode: dropboxWriteMode(mode), autorename };
+}
+
 function parseDropboxError(errJson: unknown, errText: string): {
   errorSummary?: string;
   errorTag?: string;
@@ -72,12 +92,19 @@ function isDropboxPathConflict(status: number, errJson: unknown): boolean {
   if (status === 409) return true;
   if (!errJson || typeof errJson !== "object") return false;
   const summary = (errJson as { error_summary?: string }).error_summary;
-  if (typeof summary === "string" && summary.startsWith("path/conflict")) {
+  if (typeof summary === "string" && summary.includes("path/conflict")) {
     return true;
   }
-  const err = (errJson as { error?: { [".tag"]?: string; path?: { [".tag"]?: string } } }).error;
+  const err = (errJson as {
+    error?: {
+      [".tag"]?: string;
+      path?: { [".tag"]?: string };
+      reason?: { [".tag"]?: string };
+    };
+  }).error;
   if (!err) return false;
   if (err[".tag"] === "path" && err.path?.[".tag"] === "conflict") return true;
+  if (err[".tag"] === "path" && err.reason?.[".tag"] === "conflict") return true;
   return err[".tag"] === "path_conflict";
 }
 
@@ -113,21 +140,29 @@ type UploadContext = {
   token: string;
   safePath: string;
   mode: "add" | "overwrite";
+  autorename: boolean;
   logContext: Record<string, unknown>;
   onUnauthorized?: () => Promise<string | null>;
   didForceRefresh: boolean;
+  pathConflictTriedOverwrite: boolean;
+  pathConflictTriedAutorename: boolean;
 };
 
-async function handleUploadError(
-  res: Response,
-  ctx: UploadContext & { pathConflictRetriedWithOverwrite: boolean }
-): Promise<
+type UploadErrorAction =
   | { action: "ok"; data: { path_display?: string } }
-  | { action: "retry"; mode?: "add" | "overwrite"; token?: string; pathConflictOverwrite?: boolean }
+  | {
+      action: "retry";
+      mode?: "add" | "overwrite";
+      autorename?: boolean;
+      token?: string;
+      pathConflictTriedOverwrite?: boolean;
+      pathConflictTriedAutorename?: boolean;
+    }
   | { action: "fail"; reason: string; status: number }
   | { action: "rate_limit"; retryAfterSeconds: number }
-  | { action: "session_fallback" }
-> {
+  | { action: "session_fallback" };
+
+async function handleUploadError(res: Response, ctx: UploadContext): Promise<UploadErrorAction> {
   const { errJson, errText } = await readErrorResponse(res);
   const parsed = parseDropboxError(errJson, errText);
   const requestId = res.headers.get("x-dropbox-request-id");
@@ -140,6 +175,7 @@ async function handleUploadError(
     dropboxErrorSummary: parsed.errorSummary,
     dropboxErrorTag: parsed.errorTag,
     mode: ctx.mode,
+    autorename: ctx.autorename,
     pathPreview: ctx.safePath.slice(0, 200),
   });
 
@@ -147,12 +183,30 @@ async function handleUploadError(
     return { action: "session_fallback" };
   }
 
-  if (
-    !ctx.pathConflictRetriedWithOverwrite &&
-    ctx.mode === "add" &&
-    isDropboxPathConflict(res.status, errJson)
-  ) {
-    return { action: "retry", mode: "overwrite", pathConflictOverwrite: true };
+  if (isDropboxPathConflict(res.status, errJson)) {
+    if (!ctx.pathConflictTriedOverwrite) {
+      console.log("[Dropbox upload] path conflict — retrying with overwrite", {
+        ...ctx.logContext,
+        requestId,
+        previousMode: ctx.mode,
+      });
+      return {
+        action: "retry",
+        mode: "overwrite",
+        pathConflictTriedOverwrite: true,
+      };
+    }
+    if (!ctx.pathConflictTriedAutorename) {
+      console.log("[Dropbox upload] path conflict — retrying with autorename", {
+        ...ctx.logContext,
+        requestId,
+      });
+      return {
+        action: "retry",
+        autorename: true,
+        pathConflictTriedAutorename: true,
+      };
+    }
   }
 
   if (res.status === 429) {
@@ -173,16 +227,24 @@ async function handleUploadError(
   return { action: "fail", reason: failureReason(errJson, errText, res.status), status: res.status };
 }
 
+type SessionUploadState = {
+  mode: "add" | "overwrite";
+  autorename: boolean;
+  pathConflictTriedOverwrite: boolean;
+  pathConflictTriedAutorename: boolean;
+};
+
 async function uploadViaSession(
   token: string,
   safePath: string,
   body: Buffer,
-  mode: "add" | "overwrite",
+  state: SessionUploadState,
   logContext: Record<string, unknown>,
   onUnauthorized?: () => Promise<string | null>
 ): Promise<DropboxUploadResult> {
   let activeToken = token;
   let didForceRefresh = false;
+  let { mode, autorename, pathConflictTriedOverwrite, pathConflictTriedAutorename } = state;
   const chunks: Buffer[] = [];
   for (let offset = 0; offset < body.byteLength; offset += DROPBOX_SESSION_CHUNK_BYTES) {
     chunks.push(body.subarray(offset, Math.min(offset + DROPBOX_SESSION_CHUNK_BYTES, body.byteLength)));
@@ -211,16 +273,32 @@ async function uploadViaSession(
       token: activeToken,
       safePath,
       mode,
+      autorename,
       logContext,
       onUnauthorized,
       didForceRefresh,
-      pathConflictRetriedWithOverwrite: false,
+      pathConflictTriedOverwrite,
+      pathConflictTriedAutorename,
     });
     if (handled.action === "rate_limit") {
       throw new DropboxRateLimitError(handled.retryAfterSeconds);
     }
-    if (handled.action === "retry" && handled.token) {
-      return uploadViaSession(handled.token, safePath, body, mode, logContext, onUnauthorized);
+    if (handled.action === "retry") {
+      return uploadViaSession(
+        handled.token ?? activeToken,
+        safePath,
+        body,
+        {
+          mode: handled.mode ?? mode,
+          autorename: handled.autorename ?? autorename,
+          pathConflictTriedOverwrite:
+            handled.pathConflictTriedOverwrite ?? pathConflictTriedOverwrite,
+          pathConflictTriedAutorename:
+            handled.pathConflictTriedAutorename ?? pathConflictTriedAutorename,
+        },
+        logContext,
+        onUnauthorized
+      );
     }
     return {
       ok: false,
@@ -257,7 +335,14 @@ async function uploadViaSession(
         const refreshed = await onUnauthorized();
         if (refreshed) {
           activeToken = refreshed;
-          return uploadViaSession(activeToken, safePath, body, mode, logContext, onUnauthorized);
+          return uploadViaSession(
+            activeToken,
+            safePath,
+            body,
+            { mode, autorename, pathConflictTriedOverwrite, pathConflictTriedAutorename },
+            logContext,
+            onUnauthorized
+          );
         }
       }
       if (appendRes.status === 429) {
@@ -282,28 +367,47 @@ async function uploadViaSession(
       "Dropbox-API-Arg": toLatin1Header(
         JSON.stringify({
           cursor: { session_id: sessionId, offset: uploadedOffset },
-          commit: { path: safePath, mode: dropboxWriteMode(mode) },
+          commit: buildSessionCommitArg(safePath, mode, autorename),
         })
       ),
     },
   });
 
   if (!finishRes.ok) {
-    const { errJson, errText } = await readErrorResponse(finishRes);
-    if (finishRes.status === 401 && onUnauthorized && !didForceRefresh) {
-      const refreshed = await onUnauthorized();
-      if (refreshed) {
-        return uploadViaSession(refreshed, safePath, body, mode, logContext, onUnauthorized);
-      }
+    const handled = await handleUploadError(finishRes, {
+      token: activeToken,
+      safePath,
+      mode,
+      autorename,
+      logContext,
+      onUnauthorized,
+      didForceRefresh,
+      pathConflictTriedOverwrite,
+      pathConflictTriedAutorename,
+    });
+    if (handled.action === "rate_limit") {
+      throw new DropboxRateLimitError(handled.retryAfterSeconds);
     }
-    if (finishRes.status === 429) {
-      throw new DropboxRateLimitError(
-        parseDropboxRetryAfterSeconds(finishRes.headers.get("retry-after"))
+    if (handled.action === "retry") {
+      return uploadViaSession(
+        handled.token ?? activeToken,
+        safePath,
+        body,
+        {
+          mode: handled.mode ?? mode,
+          autorename: handled.autorename ?? autorename,
+          pathConflictTriedOverwrite:
+            handled.pathConflictTriedOverwrite ?? pathConflictTriedOverwrite,
+          pathConflictTriedAutorename:
+            handled.pathConflictTriedAutorename ?? pathConflictTriedAutorename,
+        },
+        logContext,
+        onUnauthorized
       );
     }
     return {
       ok: false,
-      reason: failureReason(errJson, errText, finishRes.status),
+      reason: handled.action === "fail" ? handled.reason : "upload_session/finish failed",
       status: finishRes.status,
     };
   }
@@ -327,16 +431,25 @@ export async function uploadFileToDropbox(
   const fullPath = ensureDropboxPath(path.replace(/\/$/, ""));
   const safePath = sanitizePathForHeader(fullPath);
   const maxRetries = Math.max(0, options.maxRetries ?? DEFAULT_HTTP_MAX_RETRIES);
-  let mode = options.mode ?? "add";
+  let mode = options.mode ?? "overwrite";
+  let autorename = false;
   const logContext = options.logContext ?? {};
   let token = accessToken;
   let didForceRefresh = false;
-  let pathConflictRetriedWithOverwrite = false;
+  let pathConflictTriedOverwrite = false;
+  let pathConflictTriedAutorename = false;
   let triedSession = false;
 
   if (body.byteLength > DROPBOX_SIMPLE_UPLOAD_MAX_BYTES) {
     triedSession = true;
-    return uploadViaSession(token, safePath, body, mode, logContext, options.onUnauthorized);
+    return uploadViaSession(
+      token,
+      safePath,
+      body,
+      { mode, autorename, pathConflictTriedOverwrite, pathConflictTriedAutorename },
+      logContext,
+      options.onUnauthorized
+    );
   }
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -347,12 +460,7 @@ export async function uploadFileToDropbox(
         headers: {
           Authorization: toLatin1Header(`Bearer ${token}`),
           "Content-Type": "application/octet-stream",
-          "Dropbox-API-Arg": toLatin1Header(
-            JSON.stringify({
-              path: safePath,
-              mode: dropboxWriteMode(mode),
-            })
-          ),
+          "Dropbox-API-Arg": toLatin1Header(buildSimpleUploadArg(safePath, mode, autorename)),
         },
         body: new Uint8Array(body),
       });
@@ -376,10 +484,12 @@ export async function uploadFileToDropbox(
       token,
       safePath,
       mode,
+      autorename,
       logContext,
       onUnauthorized: options.onUnauthorized,
       didForceRefresh,
-      pathConflictRetriedWithOverwrite,
+      pathConflictTriedOverwrite,
+      pathConflictTriedAutorename,
     });
 
     if (handled.action === "ok") {
@@ -388,7 +498,14 @@ export async function uploadFileToDropbox(
     if (handled.action === "session_fallback" && !triedSession) {
       triedSession = true;
       jobLogSession("fallback", { ...logContext, bytes: body.byteLength, reason: "payload_too_large" });
-      return uploadViaSession(token, safePath, body, mode, logContext, options.onUnauthorized);
+      return uploadViaSession(
+        token,
+        safePath,
+        body,
+        { mode, autorename, pathConflictTriedOverwrite, pathConflictTriedAutorename },
+        logContext,
+        options.onUnauthorized
+      );
     }
     if (handled.action === "rate_limit") {
       if (attempt === maxRetries) {
@@ -407,7 +524,9 @@ export async function uploadFileToDropbox(
         didForceRefresh = true;
       }
       if (handled.mode) mode = handled.mode;
-      if (handled.pathConflictOverwrite) pathConflictRetriedWithOverwrite = true;
+      if (handled.autorename !== undefined) autorename = handled.autorename;
+      if (handled.pathConflictTriedOverwrite) pathConflictTriedOverwrite = true;
+      if (handled.pathConflictTriedAutorename) pathConflictTriedAutorename = true;
       continue;
     }
     if (handled.action === "fail") {
