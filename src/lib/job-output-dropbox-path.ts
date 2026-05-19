@@ -42,18 +42,30 @@ export async function buildJobOutputDropboxFileName(
   const jobIdSuffix = jobId.slice(-8);
   const base = `${sanitizedBaseName}-videitos-${jobIdSuffix}`;
 
+  // One Dropbox file per generation — suffix from providerOperationId (stable for retries).
+  if (providerOperationId) {
+    return {
+      fileName: buildSuffixedDropboxOutputFileName(
+        sanitizedBaseName,
+        jobId,
+        providerOperationId
+      ),
+      isAdditionalTake: archivedCount > 0,
+    };
+  }
+
   if (archivedCount === 0) {
     return { fileName: `${base}.mp4`, isAdditionalTake: false };
   }
 
   return {
-    fileName: buildSuffixedDropboxOutputFileName(
-      sanitizedBaseName,
-      jobId,
-      providerOperationId
-    ),
+    fileName: buildSuffixedDropboxOutputFileName(sanitizedBaseName, jobId, null),
     isAdditionalTake: true,
   };
+}
+
+export function isSuffixedDropboxOutputFileName(fileName: string): boolean {
+  return /-videitos-[a-z0-9]{8}_[a-z0-9]+\.mp4$/i.test(fileName);
 }
 
 export function joinDropboxDestinationPath(destPath: string, fileName: string): string {

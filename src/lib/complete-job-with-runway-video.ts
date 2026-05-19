@@ -37,8 +37,15 @@ import { isDropboxUploadRetryError, resolveRunwayVideoUriForJob } from "@/lib/re
 import {
   buildJobOutputDropboxFileName,
   buildSuffixedDropboxOutputFileName,
+  isSuffixedDropboxOutputFileName,
   joinDropboxDestinationPath,
 } from "@/lib/job-output-dropbox-path";
+
+function isDropboxPathConflictResult(result: { ok: boolean; status?: number; reason?: string }): boolean {
+  if (result.ok) return false;
+  if (result.status === 409) return true;
+  return typeof result.reason === "string" && result.reason.includes("path/conflict");
+}
 
 export type CompleteJobWithRunwayVideoResult =
   | { outcome: "completed"; outputDropboxPath: string }
@@ -348,29 +355,50 @@ export async function completeJobWithRunwayVideo(params: {
       logContext: buildUploadLogContext(path),
     });
 
+  // Unique path per generation → overwrite is safe (retries replace the same take, not siblings).
+  const uploadMode: "add" | "overwrite" =
+    operationId || !isAdditionalTake ? "overwrite" : "add";
+
   let uploadResult: Awaited<ReturnType<typeof uploadFileToDropbox>>;
   try {
-    uploadResult = await uploadToDropbox(
-      outputPath,
-      isAdditionalTake ? "add" : "overwrite"
-    );
+    uploadResult = await uploadToDropbox(outputPath, uploadMode);
 
-    // Retake archive can be missing (older jobs); use a suffixed path instead of failing on 409.
-    if (
-      !uploadResult.ok &&
-      uploadResult.status === 409 &&
-      !isAdditionalTake &&
-      operationId
-    ) {
-      outputFileName = buildSuffixedDropboxOutputFileName(baseName, job.id, operationId);
-      outputPath = joinDropboxDestinationPath(destPath, outputFileName);
-      isAdditionalTake = true;
-      jobLog("complete", "Dropbox path conflict — retrying with suffixed output name", {
-        jobId: job.id,
-        outputPath,
-        source,
-      });
-      uploadResult = await uploadToDropbox(outputPath, "add");
+    if (isDropboxPathConflictResult(uploadResult) && operationId) {
+      const suffixedName = buildSuffixedDropboxOutputFileName(baseName, job.id, operationId);
+      const suffixedPath = joinDropboxDestinationPath(destPath, suffixedName);
+
+      if (outputPath !== suffixedPath) {
+        outputFileName = suffixedName;
+        outputPath = suffixedPath;
+        isAdditionalTake = true;
+        jobLog("complete", "Dropbox path conflict — retrying with suffixed output name", {
+          jobId: job.id,
+          outputPath,
+          source,
+        });
+        uploadResult = await uploadToDropbox(outputPath, "overwrite");
+      } else if (!isSuffixedDropboxOutputFileName(outputFileName)) {
+        const altName = buildSuffixedDropboxOutputFileName(
+          baseName,
+          job.id,
+          `${operationId}-retry`
+        );
+        outputFileName = altName;
+        outputPath = joinDropboxDestinationPath(destPath, altName);
+        jobLog("complete", "Dropbox path conflict on base name — retrying with alternate suffix", {
+          jobId: job.id,
+          outputPath,
+          source,
+        });
+        uploadResult = await uploadToDropbox(outputPath, "overwrite");
+      } else {
+        jobLog("complete", "Dropbox path conflict — retrying overwrite on same suffixed path", {
+          jobId: job.id,
+          outputPath,
+          source,
+        });
+        uploadResult = await uploadToDropbox(outputPath, "overwrite");
+      }
     }
   } catch (err) {
     if (isDropboxRateLimitError(err)) {

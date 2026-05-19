@@ -184,6 +184,14 @@ async function handleUploadError(res: Response, ctx: UploadContext): Promise<Upl
   }
 
   if (isDropboxPathConflict(res.status, errJson)) {
+    // "add" must not fall back to overwrite — that would replace another take's file.
+    if (ctx.mode === "add") {
+      return {
+        action: "fail",
+        reason: parsed.errorSummary ?? "path/conflict",
+        status: 409,
+      };
+    }
     if (ctx.mode !== "overwrite" && !ctx.pathConflictTriedOverwrite) {
       console.log("[Dropbox upload] path conflict — retrying with overwrite", {
         ...ctx.logContext,
