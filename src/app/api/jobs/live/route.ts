@@ -66,7 +66,7 @@ export async function GET(request: NextRequest) {
     id: j.id,
     status: j.status,
     workflowPhase: j.workflowPhase,
-    runwayProgress: j.runwayProgress,
+    runwayProgress: j.runwayProgress != null ? Number(j.runwayProgress) : null,
     runwayPollStatus: j.runwayPollStatus,
     errorMessage: j.errorMessage,
     dropboxUploadErrorDetail: j.dropboxUploadErrorDetail,

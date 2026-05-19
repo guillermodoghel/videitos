@@ -9,7 +9,10 @@ import { getJobWorkflowPhaseLabel } from "@/lib/job-workflow-phase-label";
 import { appendRunwayProgressToLabel } from "@/lib/runway-progress-display";
 import { isActiveJobStatus } from "@/lib/job-live-update";
 import { JobActiveStatusDisplay } from "./JobActiveStatusDisplay";
-import { JobWorkflowProgressGraph } from "./JobWorkflowProgressGraph";
+import {
+  JobWorkflowProgressGraph,
+  jobWorkflowProgressKey,
+} from "./JobWorkflowProgressGraph";
 import { mergeJobLiveUpdates, type JobLiveUpdate } from "@/lib/job-live-update";
 
 type JobRow = {
@@ -235,11 +238,18 @@ function JobDetailsPanel({
   return (
     <div className="space-y-4">
       <JobWorkflowProgressGraph
+        key={jobWorkflowProgressKey({
+          status: job.status,
+          workflowPhase: job.workflowPhase,
+          runwayProgress: job.runwayProgress,
+          runwayPollStatus: job.runwayPollStatus,
+        })}
         status={job.status}
         workflowPhase={job.workflowPhase}
         errorMessage={job.errorMessage}
         runwayProgress={job.runwayProgress}
         runwayPollStatus={job.runwayPollStatus}
+        layout="horizontal"
       />
       <div>
         <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
@@ -519,9 +529,11 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
   }, [page, perPage, filterModel, filterStatus, filterUser, isAdmin]);
 
   const pollLiveJobs = useCallback(async () => {
-    const activeIds = jobsRef.current
-      .filter((j) => isActiveJobStatus(j.status))
-      .map((j) => j.id);
+    const activeIdSet = new Set(
+      jobsRef.current.filter((j) => isActiveJobStatus(j.status)).map((j) => j.id)
+    );
+    if (expandedId) activeIdSet.add(expandedId);
+    const activeIds = [...activeIdSet];
     if (activeIds.length === 0) {
       livePollCountRef.current += 1;
       if (livePollCountRef.current >= FULL_SYNC_EVERY_LIVE_POLLS) {
@@ -549,7 +561,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
     } catch {
       // keep previous state
     }
-  }, [fetchJobsFull]);
+  }, [fetchJobsFull, expandedId]);
 
   useEffect(() => {
     setLoading(true);
@@ -1035,7 +1047,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                   <tr className="border-b border-zinc-100 bg-zinc-50/50 dark:border-zinc-700/50 dark:bg-zinc-800/30">
                     <td colSpan={isAdmin ? 10 : 9} className="overflow-visible px-4 py-4">
                       <JobDetailsPanel
-                        job={j}
+                        job={jobs.find((row) => row.id === j.id) ?? j}
                         details={detailsCache[j.id]}
                         onRetake={
                           j.status === JOB_STATUS.COMPLETED

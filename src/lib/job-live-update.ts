@@ -58,9 +58,14 @@ export function mergeJobLiveUpdates<T extends JobLiveUpdate>(
   const next = rows.map((row) => {
     const patch = byId.get(row.id);
     if (!patch) return row;
-    if (liveSnapshot(row) === liveSnapshot(patch)) return row;
+    const normalized: JobLiveUpdate = {
+      ...patch,
+      runwayProgress:
+        patch.runwayProgress != null ? Number(patch.runwayProgress) : null,
+    };
+    if (liveSnapshot(row) === liveSnapshot(normalized)) return row;
     changed = true;
-    return { ...row, ...patch };
+    return { ...row, ...normalized };
   });
   return changed ? next : null;
 }
