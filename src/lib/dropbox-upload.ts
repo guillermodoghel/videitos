@@ -184,7 +184,7 @@ async function handleUploadError(res: Response, ctx: UploadContext): Promise<Upl
   }
 
   if (isDropboxPathConflict(res.status, errJson)) {
-    if (!ctx.pathConflictTriedOverwrite) {
+    if (ctx.mode !== "overwrite" && !ctx.pathConflictTriedOverwrite) {
       console.log("[Dropbox upload] path conflict — retrying with overwrite", {
         ...ctx.logContext,
         requestId,
@@ -436,7 +436,7 @@ export async function uploadFileToDropbox(
   const logContext = options.logContext ?? {};
   let token = accessToken;
   let didForceRefresh = false;
-  let pathConflictTriedOverwrite = false;
+  let pathConflictTriedOverwrite = mode === "overwrite";
   let pathConflictTriedAutorename = false;
   let triedSession = false;
 
