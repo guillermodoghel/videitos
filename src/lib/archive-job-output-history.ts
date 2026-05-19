@@ -11,10 +11,14 @@ import {
 } from "@/lib/s3";
 import { resolveRunwayVideoUriForJob } from "@/lib/resolve-runway-video-uri";
 
+export type ArchiveJobOutputResult =
+  | { ok: true; version: number }
+  | { ok: false; error: string };
+
 /**
  * Snapshot the current completed output before retake (Dropbox path + optional S3 copy).
  */
-export async function archiveJobOutputHistory(jobId: string): Promise<void> {
+export async function archiveJobOutputHistory(jobId: string): Promise<ArchiveJobOutputResult> {
   const job = await prisma.job.findUnique({
     where: { id: jobId },
     select: {
@@ -32,7 +36,9 @@ export async function archiveJobOutputHistory(jobId: string): Promise<void> {
     },
   });
 
-  if (!job) return;
+  if (!job) {
+    return { ok: false, error: "Job not found" };
+  }
 
   const hasOutput =
     !!job.outputDropboxPath ||
@@ -42,7 +48,7 @@ export async function archiveJobOutputHistory(jobId: string): Promise<void> {
 
   if (!hasOutput) {
     jobLog("archive-output", "nothing to archive", { jobId });
-    return;
+    return { ok: false, error: "No output to archive" };
   }
 
   const agg = await prisma.jobOutput.aggregate({
@@ -80,6 +86,8 @@ export async function archiveJobOutputHistory(jobId: string): Promise<void> {
     hasS3: !!outputVideoS3Key,
     hasDropbox: !!job.outputDropboxPath,
   });
+
+  return { ok: true, version };
 }
 
 async function loadOutputVideoBuffer(job: {

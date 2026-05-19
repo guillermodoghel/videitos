@@ -36,6 +36,7 @@ import { persistRunwayVideoUri } from "@/lib/persist-runway-video-uri";
 import { isDropboxUploadRetryError, resolveRunwayVideoUriForJob } from "@/lib/resolve-runway-video-uri";
 import {
   buildJobOutputDropboxFileName,
+  buildSuffixedDropboxOutputFileName,
   joinDropboxDestinationPath,
 } from "@/lib/job-output-dropbox-path";
 
@@ -311,36 +312,66 @@ export async function completeJobWithRunwayVideo(params: {
 
   const rawBaseName = job.dropboxSourceFilePath.split("/").pop()?.replace(/\.[^.]+$/, "") ?? "video";
   const baseName = sanitizeOutputFileBaseName(rawBaseName);
-  const outputFileName = await buildJobOutputDropboxFileName(job.id, baseName);
-  const outputPath = joinDropboxDestinationPath(destPath, outputFileName);
+  const operationId = operationName ?? job.providerOperationId;
+  let { fileName: outputFileName, isAdditionalTake } = await buildJobOutputDropboxFileName(
+    job.id,
+    baseName,
+    operationId
+  );
+  let outputPath = joinDropboxDestinationPath(destPath, outputFileName);
 
   await prisma.job.update({
     where: { id: job.id },
     data: { workflowPhase: JOB_WORKFLOW_PHASE.UPLOADING },
   });
 
+  const buildUploadLogContext = (path: string) => ({
+    source,
+    jobId: job.id,
+    userId: job.userId,
+    templateId: job.templateId,
+    templateModel: template?.model ?? null,
+    providerOperationId: operationName ?? job.providerOperationId,
+    dropboxDestinationPath: destPath,
+    outputPath: path,
+    dropboxSourceFilePath: job.dropboxSourceFilePath,
+    hasPreGenImage: !!job.preGenImageKey,
+    videoBufferBytes: videoBuffer.byteLength,
+    videoUriLength: videoUri?.length ?? 0,
+    videoUriHost: videoUriHost ?? null,
+  });
+
+  const uploadToDropbox = (path: string, mode: "add" | "overwrite") =>
+    uploadFileToDropbox(token, path, videoBuffer, {
+      mode,
+      onUnauthorized: () => getValidAccessTokenWithOptions(job.userId, { forceRefresh: true }),
+      logContext: buildUploadLogContext(path),
+    });
+
   let uploadResult: Awaited<ReturnType<typeof uploadFileToDropbox>>;
   try {
-    uploadResult = await uploadFileToDropbox(token, outputPath, videoBuffer, {
-      // overwrite: same job id → same output name; retries must not fail on path/conflict
-      mode: "overwrite",
-      onUnauthorized: () => getValidAccessTokenWithOptions(job.userId, { forceRefresh: true }),
-      logContext: {
-        source,
+    uploadResult = await uploadToDropbox(
+      outputPath,
+      isAdditionalTake ? "add" : "overwrite"
+    );
+
+    // Retake archive can be missing (older jobs); use a suffixed path instead of failing on 409.
+    if (
+      !uploadResult.ok &&
+      uploadResult.status === 409 &&
+      !isAdditionalTake &&
+      operationId
+    ) {
+      outputFileName = buildSuffixedDropboxOutputFileName(baseName, job.id, operationId);
+      outputPath = joinDropboxDestinationPath(destPath, outputFileName);
+      isAdditionalTake = true;
+      jobLog("complete", "Dropbox path conflict — retrying with suffixed output name", {
         jobId: job.id,
-        userId: job.userId,
-        templateId: job.templateId,
-        templateModel: template?.model ?? null,
-        providerOperationId: operationName ?? job.providerOperationId,
-        dropboxDestinationPath: destPath,
         outputPath,
-        dropboxSourceFilePath: job.dropboxSourceFilePath,
-        hasPreGenImage: !!job.preGenImageKey,
-        videoBufferBytes: videoBuffer.byteLength,
-        videoUriLength: videoUri?.length ?? 0,
-        videoUriHost: videoUriHost ?? null,
-      },
-    });
+        source,
+      });
+      uploadResult = await uploadToDropbox(outputPath, "add");
+    }
   } catch (err) {
     if (isDropboxRateLimitError(err)) {
       await prisma.job.update({

@@ -436,7 +436,7 @@ export async function uploadFileToDropbox(
   const logContext = options.logContext ?? {};
   let token = accessToken;
   let didForceRefresh = false;
-  let pathConflictTriedOverwrite = mode === "overwrite";
+  let pathConflictTriedOverwrite = false;
   let pathConflictTriedAutorename = false;
   let triedSession = false;
 

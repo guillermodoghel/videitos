@@ -368,7 +368,7 @@ function JobDetailsPanel({
             </p>
           )}
           <div className="space-y-4">
-            {outputHistory.map((entry) => (
+            {outputHistory.map((entry, index) => (
               <div
                 key={`${entry.version}-${entry.isCurrent ? "current" : "archived"}`}
                 className={`max-w-lg rounded-lg border p-3 ${
@@ -379,7 +379,13 @@ function JobDetailsPanel({
               >
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">
-                    {entry.isCurrent ? "Video actual" : `Versión ${entry.version}`}
+                    {outputHistory.length > 1
+                      ? entry.isCurrent
+                        ? `Take ${index + 1} (current)`
+                        : `Take ${index + 1}`
+                      : entry.isCurrent
+                        ? "Video actual"
+                        : `Versión ${entry.version}`}
                   </span>
                   <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
                     {formatHistoryDate(entry.completedAt)}
@@ -682,6 +688,11 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
         alert(data.error ?? "Retry upload failed");
         return;
       }
+      setDetailsCache((c) => {
+        const next = { ...c };
+        delete next[jobId];
+        return next;
+      });
       await fetchJobsFull();
     } catch {
       alert("Retry upload failed");

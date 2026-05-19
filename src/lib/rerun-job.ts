@@ -70,12 +70,32 @@ export async function rerunJob(jobId: string, mode: RerunMode): Promise<RerunJob
 
   if (mode === "retake") {
     try {
-      await archiveJobOutputHistory(jobId);
+      const archived = await archiveJobOutputHistory(jobId);
+      if (!archived.ok) {
+        jobLogError("rerun", "archive output history failed", {
+          jobId,
+          error: archived.error,
+        });
+        return {
+          ok: false,
+          error:
+            archived.error === "No output to archive"
+              ? "Job has no output to retake"
+              : "Failed to archive previous output. Run database migrations if this persists.",
+          status: 500,
+        };
+      }
     } catch (err) {
-      jobLogError("rerun", "archive output history failed (continuing retake)", {
+      jobLogError("rerun", "archive output history failed", {
         jobId,
         error: err instanceof Error ? err.message : String(err),
       });
+      return {
+        ok: false,
+        error:
+          "Failed to archive previous output (JobOutput table may be missing). Run database migrations.",
+        status: 500,
+      };
     }
   }
 
