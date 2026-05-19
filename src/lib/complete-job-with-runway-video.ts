@@ -10,7 +10,7 @@ import { isRunwayImageToVideoModel, parseTemplateConfig } from "@/lib/video-mode
 import { computeJobCost } from "@/lib/credits";
 import { getRunwayApiKeyForUser, usesPlatformKey } from "@/lib/runway-api-key";
 import { getValidAccessToken, getValidAccessTokenWithOptions } from "@/lib/dropbox";
-import { uploadFileToDropbox } from "@/lib/dropbox-upload";
+import { uploadJobOutputToDropbox } from "@/lib/upload-job-output-to-dropbox";
 import { maybeAutoRecharge } from "@/lib/stripe";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import {
@@ -34,18 +34,6 @@ import {
 } from "@/lib/s3";
 import { persistRunwayVideoUri } from "@/lib/persist-runway-video-uri";
 import { isDropboxUploadRetryError, resolveRunwayVideoUriForJob } from "@/lib/resolve-runway-video-uri";
-import {
-  buildJobOutputDropboxFileName,
-  buildSuffixedDropboxOutputFileName,
-  isSuffixedDropboxOutputFileName,
-  joinDropboxDestinationPath,
-} from "@/lib/job-output-dropbox-path";
-
-function isDropboxPathConflictResult(result: { ok: boolean; status?: number; reason?: string }): boolean {
-  if (result.ok) return false;
-  if (result.status === 409) return true;
-  return typeof result.reason === "string" && result.reason.includes("path/conflict");
-}
 
 export type CompleteJobWithRunwayVideoResult =
   | { outcome: "completed"; outputDropboxPath: string }
@@ -320,86 +308,41 @@ export async function completeJobWithRunwayVideo(params: {
   const rawBaseName = job.dropboxSourceFilePath.split("/").pop()?.replace(/\.[^.]+$/, "") ?? "video";
   const baseName = sanitizeOutputFileBaseName(rawBaseName);
   const operationId = operationName ?? job.providerOperationId;
-  let { fileName: outputFileName, isAdditionalTake } = await buildJobOutputDropboxFileName(
-    job.id,
-    baseName,
-    operationId
-  );
-  let outputPath = joinDropboxDestinationPath(destPath, outputFileName);
 
   await prisma.job.update({
     where: { id: job.id },
     data: { workflowPhase: JOB_WORKFLOW_PHASE.UPLOADING },
   });
 
-  const buildUploadLogContext = (path: string) => ({
+  const uploadLogContext = {
     source,
     jobId: job.id,
     userId: job.userId,
     templateId: job.templateId,
     templateModel: template?.model ?? null,
-    providerOperationId: operationName ?? job.providerOperationId,
+    providerOperationId: operationId,
     dropboxDestinationPath: destPath,
-    outputPath: path,
     dropboxSourceFilePath: job.dropboxSourceFilePath,
     hasPreGenImage: !!job.preGenImageKey,
     videoBufferBytes: videoBuffer.byteLength,
     videoUriLength: videoUri?.length ?? 0,
     videoUriHost: videoUriHost ?? null,
-  });
+  };
 
-  const uploadToDropbox = (path: string, mode: "add" | "overwrite") =>
-    uploadFileToDropbox(token, path, videoBuffer, {
-      mode,
-      onUnauthorized: () => getValidAccessTokenWithOptions(job.userId, { forceRefresh: true }),
-      logContext: buildUploadLogContext(path),
-    });
-
-  // Unique path per generation → overwrite is safe (retries replace the same take, not siblings).
-  const uploadMode: "add" | "overwrite" =
-    operationId || !isAdditionalTake ? "overwrite" : "add";
-
-  let uploadResult: Awaited<ReturnType<typeof uploadFileToDropbox>>;
+  let uploadResult: Awaited<ReturnType<typeof uploadJobOutputToDropbox>>;
+  let outputPath: string | undefined;
   try {
-    uploadResult = await uploadToDropbox(outputPath, uploadMode);
-
-    if (isDropboxPathConflictResult(uploadResult) && operationId) {
-      const suffixedName = buildSuffixedDropboxOutputFileName(baseName, job.id, operationId);
-      const suffixedPath = joinDropboxDestinationPath(destPath, suffixedName);
-
-      if (outputPath !== suffixedPath) {
-        outputFileName = suffixedName;
-        outputPath = suffixedPath;
-        isAdditionalTake = true;
-        jobLog("complete", "Dropbox path conflict — retrying with suffixed output name", {
-          jobId: job.id,
-          outputPath,
-          source,
-        });
-        uploadResult = await uploadToDropbox(outputPath, "overwrite");
-      } else if (!isSuffixedDropboxOutputFileName(outputFileName)) {
-        const altName = buildSuffixedDropboxOutputFileName(
-          baseName,
-          job.id,
-          `${operationId}-retry`
-        );
-        outputFileName = altName;
-        outputPath = joinDropboxDestinationPath(destPath, altName);
-        jobLog("complete", "Dropbox path conflict on base name — retrying with alternate suffix", {
-          jobId: job.id,
-          outputPath,
-          source,
-        });
-        uploadResult = await uploadToDropbox(outputPath, "overwrite");
-      } else {
-        jobLog("complete", "Dropbox path conflict — retrying overwrite on same suffixed path", {
-          jobId: job.id,
-          outputPath,
-          source,
-        });
-        uploadResult = await uploadToDropbox(outputPath, "overwrite");
-      }
-    }
+    uploadResult = await uploadJobOutputToDropbox({
+      token,
+      destPath,
+      baseName,
+      jobId: job.id,
+      operationId,
+      videoBuffer,
+      onUnauthorized: () => getValidAccessTokenWithOptions(job.userId, { forceRefresh: true }),
+      logContext: uploadLogContext,
+    });
+    outputPath = uploadResult.outputPath;
   } catch (err) {
     if (isDropboxRateLimitError(err)) {
       await prisma.job.update({
@@ -459,7 +402,16 @@ export async function completeJobWithRunwayVideo(params: {
   const apiCost = usePlatform ? computed.apiCost : 0;
   const creditCost = usePlatform ? computed.creditCost : 0;
 
-  const finalPath = uploadResult.path_display;
+  const finalPath = uploadResult.path_display ?? outputPath;
+  if (!finalPath) {
+    return { outcome: "failed", error: "Upload succeeded but no Dropbox path returned" };
+  }
+
+  jobLog("complete", "Dropbox upload succeeded", {
+    jobId: job.id,
+    outputDropboxPath: finalPath,
+    source,
+  });
 
   const completed = await prisma.$transaction(async (tx) => {
     const active = await tx.job.findFirst({

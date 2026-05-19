@@ -39,33 +39,12 @@ export async function buildJobOutputDropboxFileName(
   providerOperationId?: string | null
 ): Promise<JobOutputDropboxFileName> {
   const archivedCount = await prisma.jobOutput.count({ where: { jobId } });
-  const jobIdSuffix = jobId.slice(-8);
-  const base = `${sanitizedBaseName}-videitos-${jobIdSuffix}`;
-
-  // One Dropbox file per generation — suffix from providerOperationId (stable for retries).
-  if (providerOperationId) {
-    return {
-      fileName: buildSuffixedDropboxOutputFileName(
-        sanitizedBaseName,
-        jobId,
-        providerOperationId
-      ),
-      isAdditionalTake: archivedCount > 0,
-    };
-  }
-
-  if (archivedCount === 0) {
-    return { fileName: `${base}.mp4`, isAdditionalTake: false };
-  }
+  const seed = providerOperationId ?? jobId;
 
   return {
-    fileName: buildSuffixedDropboxOutputFileName(sanitizedBaseName, jobId, null),
-    isAdditionalTake: true,
+    fileName: buildSuffixedDropboxOutputFileName(sanitizedBaseName, jobId, seed),
+    isAdditionalTake: archivedCount > 0,
   };
-}
-
-export function isSuffixedDropboxOutputFileName(fileName: string): boolean {
-  return /-videitos-[a-z0-9]{8}_[a-z0-9]+\.mp4$/i.test(fileName);
 }
 
 export function joinDropboxDestinationPath(destPath: string, fileName: string): string {
