@@ -83,7 +83,6 @@ export async function GET(
 
   for (const archived of archivedOutputs) {
     const url = await resolveJobOutputVideoUrl(job.userId, {
-      jobId: job.id,
       outputVideoS3Key: archived.outputVideoS3Key,
       outputDropboxPath: archived.outputDropboxPath,
     });

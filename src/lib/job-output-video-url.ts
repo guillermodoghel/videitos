@@ -62,18 +62,10 @@ export async function resolveJobOutputVideoUrl(
     outputDropboxPath?: string | null;
   }
 ): Promise<string | null> {
-  if (output.jobId) {
-    const s3Url = await ensureJobOutputVideoInS3({
-      userId,
-      jobId: output.jobId,
-      outputDropboxPath: output.outputDropboxPath,
-    });
-    if (s3Url) return s3Url;
-  }
-
-  const s3Key = output.outputVideoS3Key;
-  if (s3Key && isS3Key(s3Key) && s3Key.startsWith(`${userId}/`)) {
-    const url = await getPresignedUrlIfExists(s3Key);
+  // Per-take history key (archived outputs) — must come before job output.mp4 lookup.
+  const historyKey = output.outputVideoS3Key;
+  if (historyKey && isS3Key(historyKey) && historyKey.startsWith(`${userId}/`)) {
+    const url = await getPresignedUrlIfExists(historyKey);
     if (url) return url;
   }
 
@@ -84,6 +76,15 @@ export async function resolveJobOutputVideoUrl(
       const link = await getTemporaryLink(token, dropboxPath);
       if (link) return link.link;
     }
+  }
+
+  // Current take: cache under jobs/{jobId}/output.mp4 for dashboard playback.
+  if (output.jobId) {
+    return ensureJobOutputVideoInS3({
+      userId,
+      jobId: output.jobId,
+      outputDropboxPath: dropboxPath,
+    });
   }
 
   return null;

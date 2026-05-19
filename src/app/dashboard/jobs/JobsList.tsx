@@ -474,6 +474,28 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
     if (totalPages > 0 && page > totalPages) setPage(totalPages);
   }, [totalPages, page]);
 
+  const loadJobDetails = useCallback((jobId: string, opts?: { showLoading?: boolean }) => {
+    if (opts?.showLoading !== false) {
+      setDetailsLoading(jobId);
+    }
+    return fetch(`/api/jobs/${jobId}/details`, { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: JobDetails | null) => {
+        if (data) {
+          setDetailsCache((c) => ({
+            ...c,
+            [jobId]: { ...data, outputHistory: data.outputHistory ?? [] },
+          }));
+        }
+        return data;
+      })
+      .finally(() => {
+        if (opts?.showLoading !== false) {
+          setDetailsLoading((current) => (current === jobId ? null : current));
+        }
+      });
+  }, []);
+
   const fetchJobsFull = useCallback(async (opts?: { silent?: boolean }) => {
     try {
       const params = new URLSearchParams({ page: String(page), perPage: String(perPage) });
@@ -553,21 +575,8 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
     if (!firstActive) return;
     didAutoExpandActiveRef.current = true;
     setExpandedId(firstActive.id);
-    if (!detailsCache[firstActive.id]) {
-      setDetailsLoading(firstActive.id);
-      fetch(`/api/jobs/${firstActive.id}/details`, { credentials: "include" })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data: JobDetails | null) => {
-          if (data) {
-            setDetailsCache((c) => ({
-              ...c,
-              [firstActive.id]: { ...data, outputHistory: data.outputHistory ?? [] },
-            }));
-          }
-        })
-        .finally(() => setDetailsLoading(null));
-    }
-  }, [jobs, loading]);
+    void loadJobDetails(firstActive.id);
+  }, [jobs, loading, loadJobDetails]);
 
   useEffect(() => {
     if (!pollingEnabled || !hasActiveJobs || !tabVisible) return;
@@ -721,28 +730,21 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
     }
   }
 
-  // When a job transitions to completed while expanded, load output video once.
+  // Refresh expanded details when a job completes (e.g. after retake) so take history updates.
   useEffect(() => {
     for (const j of jobs) {
       const prev = jobStatusRef.current[j.id];
       jobStatusRef.current[j.id] = j.status;
       if (j.status !== JOB_STATUS.COMPLETED || prev === JOB_STATUS.COMPLETED) continue;
-      if (expandedId !== j.id && !detailsCache[j.id]) continue;
-      const cached = detailsCache[j.id];
-      if (cached?.outputVideoUrl) continue;
-      if (cached?.outputHistory?.some((e) => e.isCurrent && e.outputVideoUrl)) continue;
-      fetch(`/api/jobs/${j.id}/details`, { credentials: "include" })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data: JobDetails | null) => {
-          if (data) {
-            setDetailsCache((c) => ({
-              ...c,
-              [j.id]: { ...data, outputHistory: data.outputHistory ?? [] },
-            }));
-          }
-        });
+      if (expandedId !== j.id) continue;
+      setDetailsCache((c) => {
+        const next = { ...c };
+        delete next[j.id];
+        return next;
+      });
+      void loadJobDetails(j.id, { showLoading: false });
     }
-  }, [jobs, expandedId, detailsCache]);
+  }, [jobs, expandedId, loadJobDetails]);
 
   function toggleExpand(jobId: string) {
     if (expandedId === jobId) {
@@ -750,19 +752,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
       return;
     }
     setExpandedId(jobId);
-    if (detailsCache[jobId]) return;
-    setDetailsLoading(jobId);
-    fetch(`/api/jobs/${jobId}/details`, { credentials: "include" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data: JobDetails | null) => {
-        if (data) {
-          setDetailsCache((c) => ({
-            ...c,
-            [jobId]: { ...data, outputHistory: data.outputHistory ?? [] },
-          }));
-        }
-      })
-      .finally(() => setDetailsLoading(null));
+    void loadJobDetails(jobId);
   }
 
   if (loading) {
