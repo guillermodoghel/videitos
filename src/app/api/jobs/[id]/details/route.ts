@@ -5,6 +5,7 @@ import { getPresignedUrl, getPresignedUrlIfExists, isS3Key, pendingJobVideoKey }
 import { USER_ROLE } from "@/lib/constants/user-role";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { resolveJobOutputVideoUrl } from "@/lib/job-output-video-url";
+import { syncDiscoveredOutputsToJobOutput } from "@/lib/sync-discovered-job-outputs";
 
 export type JobOutputHistoryEntry = {
   version: number;
@@ -35,12 +36,20 @@ export async function GET(
       ...(isAdmin ? {} : { userId: sessionUser.id }),
     },
     include: {
-      template: { select: { config: true } },
+      template: { select: { config: true, dropboxDestinationPath: true } },
     },
   });
 
   if (!job) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  if (job.template.dropboxDestinationPath) {
+    try {
+      await syncDiscoveredOutputsToJobOutput(job.id);
+    } catch {
+      // JobOutput table may be missing until migrations are applied
+    }
   }
 
   let archivedOutputs: Awaited<ReturnType<typeof prisma.jobOutput.findMany>> = [];

@@ -715,6 +715,9 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
         return next;
       });
       await fetchJobsFull();
+      if (expandedId === jobId) {
+        void loadJobDetails(jobId);
+      }
     } catch {
       alert("Retry upload failed");
     } finally {

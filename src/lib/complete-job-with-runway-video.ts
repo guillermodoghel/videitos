@@ -33,6 +33,7 @@ import {
   uploadJobOutputVideo,
 } from "@/lib/s3";
 import { persistRunwayVideoUri } from "@/lib/persist-runway-video-uri";
+import { syncDiscoveredOutputsToJobOutput } from "@/lib/sync-discovered-job-outputs";
 import { isDropboxUploadRetryError, resolveRunwayVideoUriForJob } from "@/lib/resolve-runway-video-uri";
 
 export type CompleteJobWithRunwayVideoResult =
@@ -497,6 +498,15 @@ export async function completeJobWithRunwayVideo(params: {
   }
 
   await deletePendingJobVideo(job.userId, job.id);
+
+  try {
+    await syncDiscoveredOutputsToJobOutput(job.id);
+  } catch (err) {
+    jobLogError("complete", "sync discovered outputs failed (non-fatal)", {
+      jobId: job.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   jobLog("complete", "job completed", { jobId: job.id, outputDropboxPath: finalPath, source });
   return { outcome: "completed", outputDropboxPath: finalPath };
