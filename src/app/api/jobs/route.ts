@@ -8,6 +8,12 @@ import { reconcileStuckDropboxUploads } from "@/lib/reconcile-stuck-dropbox-uplo
 import { releaseStaleRunwayClaims } from "@/lib/release-stale-runway-claims";
 import { jobCanRetryDropboxUpload } from "@/lib/resolve-runway-video-uri";
 import { buildJobThumbnailUrl } from "@/lib/job-thumbnail-token";
+import {
+  buildJobOrderBy,
+  buildJobsWhere,
+  parseJobSort,
+  parseJobsListFilters,
+} from "@/lib/jobs-list-query";
 
 const DEFAULT_PER_PAGE = 10;
 const MIN_PER_PAGE = 5;
@@ -16,7 +22,7 @@ const MAX_PER_PAGE = 100;
 /**
  * GET /api/jobs
  * Returns the current user's jobs with template name for the Jobs page.
- * Query: page (1-based), perPage (default 20), model (template model id), status (job status).
+ * Query: page, perPage, model, status, user (admin), q (search), sort, hasTakes, dropboxRetry.
  * Returns jobs, total, page, perPage.
  */
 export async function GET(request: NextRequest) {
@@ -31,23 +37,10 @@ export async function GET(request: NextRequest) {
   const page = Math.max(1, parseInt(searchParams.get("page") ?? "1", 10) || 1);
   let perPage = parseInt(searchParams.get("perPage") ?? String(DEFAULT_PER_PAGE), 10) || DEFAULT_PER_PAGE;
   perPage = Math.min(MAX_PER_PAGE, Math.max(MIN_PER_PAGE, perPage));
-  const model = searchParams.get("model")?.trim() || null;
-  const status = searchParams.get("status")?.trim() || null;
-  const userQuery = searchParams.get("user")?.trim() || null;
-
-  const where = {
-    ...(isAdmin ? {} : { userId }),
-    ...(status ? { status } : {}),
-    ...(model ? { template: { model } } : {}),
-    ...(isAdmin && userQuery
-      ? {
-          OR: [
-            { user: { email: { contains: userQuery, mode: "insensitive" as const } } },
-            { userId: { contains: userQuery, mode: "insensitive" as const } },
-          ],
-        }
-      : {}),
-  };
+  const filters = parseJobsListFilters(searchParams);
+  const sort = parseJobSort(searchParams.get("sort"));
+  const where = buildJobsWhere(filters, { userId, isAdmin });
+  const orderBy = buildJobOrderBy(sort);
 
   const activeStatuses = [JOB_STATUS.QUEUED, JOB_STATUS.PROCESSING, JOB_STATUS.SENT_TO_VEO];
 
@@ -66,7 +59,7 @@ export async function GET(request: NextRequest) {
   const [jobs, total, activeCount] = await Promise.all([
     prisma.job.findMany({
       where,
-      orderBy: { createdAt: "desc" },
+      orderBy,
       skip: (page - 1) * perPage,
       take: perPage,
       include: {
@@ -77,16 +70,10 @@ export async function GET(request: NextRequest) {
     prisma.job.count({ where }),
     prisma.job.count({
       where: {
-        ...(isAdmin ? {} : { userId }),
-        status: { in: activeStatuses },
-        ...(isAdmin && userQuery
-          ? {
-              OR: [
-                { user: { email: { contains: userQuery, mode: "insensitive" as const } } },
-                { userId: { contains: userQuery, mode: "insensitive" as const } },
-              ],
-            }
-          : {}),
+        AND: [
+          where,
+          { status: { in: activeStatuses } },
+        ],
       },
     }),
   ]);
@@ -118,6 +105,7 @@ export async function GET(request: NextRequest) {
       apiCost: j.apiCost != null ? Number(j.apiCost) : null,
       creditCost: j.creditCost != null ? Number(j.creditCost) : null,
       createdAt: j.createdAt.toISOString(),
+      updatedAt: j.updatedAt.toISOString(),
       sentAt: j.sentAt?.toISOString() ?? null,
       completedAt: j.completedAt?.toISOString() ?? null,
     }));
@@ -127,6 +115,7 @@ export async function GET(request: NextRequest) {
     total,
     page,
     perPage,
+    sort,
     /** True if user has any job queued or in progress; frontend uses this to decide whether to keep polling. */
     hasActiveJobs: activeCount > 0,
     isAdmin,

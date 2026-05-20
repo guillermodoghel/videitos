@@ -14,6 +14,12 @@ import {
   jobWorkflowProgressKey,
 } from "./JobWorkflowProgressGraph";
 import { mergeJobLiveUpdates, type JobLiveUpdate } from "@/lib/job-live-update";
+import {
+  DEFAULT_JOB_SORT,
+  hasActiveJobsListFilters,
+  JOB_SORT_OPTIONS,
+  type JobSortValue,
+} from "@/lib/jobs-list-query";
 
 type JobRow = {
   id: string;
@@ -36,6 +42,7 @@ type JobRow = {
   apiCost: number | null;
   creditCost: number | null;
   createdAt: string;
+  updatedAt: string;
   sentAt: string | null;
   completedAt: string | null;
 };
@@ -60,6 +67,17 @@ const EXPANDED_POLL_MS = 5_000;
 const FULL_SYNC_EVERY_LIVE_POLLS = 6;
 const DEFAULT_PER_PAGE = 10;
 const PER_PAGE_OPTIONS = [10, 20, 50, 100];
+
+function formatListDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 function formatDuration(createdAt: string, completedAt: string | null): string {
   if (!completedAt) return "—";
@@ -456,6 +474,11 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
   const [filterModel, setFilterModel] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [filterUser, setFilterUser] = useState("");
+  const [filterSearchInput, setFilterSearchInput] = useState("");
+  const [filterSearch, setFilterSearch] = useState("");
+  const [sortBy, setSortBy] = useState<JobSortValue>(DEFAULT_JOB_SORT);
+  const [filterHasTakes, setFilterHasTakes] = useState(false);
+  const [filterDropboxRetry, setFilterDropboxRetry] = useState(false);
   const [loading, setLoading] = useState(true);
   const [pollingEnabled, setPollingEnabled] = useState(true);
   const [tabVisible, setTabVisible] = useState(true);
@@ -483,6 +506,38 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
   useEffect(() => {
     if (totalPages > 0 && page > totalPages) setPage(totalPages);
   }, [totalPages, page]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setFilterSearch(filterSearchInput.trim());
+    }, 400);
+    return () => clearTimeout(t);
+  }, [filterSearchInput]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filterSearch]);
+
+  const filtersActive = hasActiveJobsListFilters({
+    model: filterModel || null,
+    status: filterStatus || null,
+    userQuery: isAdmin ? filterUser.trim() || null : null,
+    search: filterSearch || null,
+    hasTakes: filterHasTakes,
+    dropboxRetryOnly: filterDropboxRetry,
+  });
+
+  function clearAllFilters() {
+    setFilterModel("");
+    setFilterStatus("");
+    setFilterUser("");
+    setFilterSearchInput("");
+    setFilterSearch("");
+    setSortBy(DEFAULT_JOB_SORT);
+    setFilterHasTakes(false);
+    setFilterDropboxRetry(false);
+    setPage(1);
+  }
 
   const loadJobDetails = useCallback((jobId: string, opts?: { showLoading?: boolean }) => {
     if (opts?.showLoading !== false) {
@@ -512,6 +567,10 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
       if (filterModel) params.set("model", filterModel);
       if (filterStatus) params.set("status", filterStatus);
       if (isAdmin && filterUser.trim()) params.set("user", filterUser.trim());
+      if (filterSearch) params.set("q", filterSearch);
+      if (sortBy !== DEFAULT_JOB_SORT) params.set("sort", sortBy);
+      if (filterHasTakes) params.set("hasTakes", "1");
+      if (filterDropboxRetry) params.set("dropboxRetry", "1");
       const res = await fetch(`/api/jobs?${params}`, { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
@@ -526,7 +585,18 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
     } finally {
       if (!opts?.silent) setLoading(false);
     }
-  }, [page, perPage, filterModel, filterStatus, filterUser, isAdmin]);
+  }, [
+    page,
+    perPage,
+    filterModel,
+    filterStatus,
+    filterUser,
+    filterSearch,
+    sortBy,
+    filterHasTakes,
+    filterDropboxRetry,
+    isAdmin,
+  ]);
 
   const pollLiveJobs = useCallback(async () => {
     const activeIdSet = new Set(
@@ -778,7 +848,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
     );
   }
 
-  if (!loading && total === 0 && !filterModel && !filterStatus) {
+  if (!loading && total === 0 && !filtersActive) {
     return (
       <div className="space-y-4">
         <div className="rounded-xl border border-zinc-200 bg-white p-8 text-center dark:border-zinc-800 dark:bg-zinc-900">
@@ -798,8 +868,36 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
 
   return (
     <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="flex flex-wrap items-center gap-3 border-b border-zinc-200 px-4 py-3 dark:border-zinc-700">
+      <div className="space-y-3 border-b border-zinc-200 px-4 py-3 dark:border-zinc-700">
+        <div className="flex flex-wrap items-center gap-3">
         <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Filter</span>
+        <label className="flex min-w-[12rem] flex-1 items-center gap-2 text-sm">
+          <span className="shrink-0 text-zinc-600 dark:text-zinc-400">Search</span>
+          <input
+            type="search"
+            value={filterSearchInput}
+            onChange={(e) => setFilterSearchInput(e.target.value)}
+            placeholder="Job id, file, template, path…"
+            className="w-full min-w-[10rem] rounded border border-zinc-300 bg-white px-2 py-1.5 text-zinc-900 placeholder:text-zinc-400 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500"
+          />
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-zinc-600 dark:text-zinc-400">Sort</span>
+          <select
+            value={sortBy}
+            onChange={(e) => {
+              setSortBy(e.target.value as JobSortValue);
+              setPage(1);
+            }}
+            className="rounded border border-zinc-300 bg-white px-2 py-1.5 text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+          >
+            {JOB_SORT_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="flex items-center gap-2 text-sm">
           <span className="text-zinc-600 dark:text-zinc-400">Model</span>
           <select
@@ -850,8 +948,43 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
             />
           </label>
         )}
+        </div>
+        <div className="flex flex-wrap items-center gap-4">
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+          <input
+            type="checkbox"
+            checked={filterHasTakes}
+            onChange={(e) => {
+              setFilterHasTakes(e.target.checked);
+              setPage(1);
+            }}
+            className="h-4 w-4 rounded border-zinc-300 dark:border-zinc-600"
+          />
+          Has multiple takes
+        </label>
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+          <input
+            type="checkbox"
+            checked={filterDropboxRetry}
+            onChange={(e) => {
+              setFilterDropboxRetry(e.target.checked);
+              setPage(1);
+            }}
+            className="h-4 w-4 rounded border-zinc-300 dark:border-zinc-600"
+          />
+          Dropbox upload retry
+        </label>
+        {filtersActive && (
+          <button
+            type="button"
+            onClick={clearAllFilters}
+            className="text-xs font-medium text-sky-700 hover:underline dark:text-sky-300"
+          >
+            Clear filters
+          </button>
+        )}
         {failedOnPage.length > 0 && (
-          <div className="flex items-center gap-2 border-l border-zinc-200 pl-3 dark:border-zinc-700">
+          <div className="ml-auto flex items-center gap-2 border-l border-zinc-200 pl-3 dark:border-zinc-700">
             <button
               type="button"
               onClick={allFailedSelected ? deselectAll : selectAllFailed}
@@ -876,6 +1009,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
             )}
           </div>
         )}
+        </div>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm">
@@ -901,6 +1035,9 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                 Status
               </th>
               <th className="px-4 py-3 font-medium text-zinc-700 dark:text-zinc-300">
+                Updated
+              </th>
+              <th className="px-4 py-3 font-medium text-zinc-700 dark:text-zinc-300">
                 Duration
               </th>
               <th className="px-4 py-3 font-medium text-zinc-700 dark:text-zinc-300">
@@ -914,7 +1051,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
           <tbody>
             {jobs.length === 0 ? (
               <tr>
-                <td colSpan={isAdmin ? 10 : 9} className="px-4 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
+                <td colSpan={isAdmin ? 11 : 10} className="px-4 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
                   No jobs match the current filters.
                 </td>
               </tr>
@@ -988,6 +1125,9 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                     />
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-zinc-600 dark:text-zinc-400 tabular-nums">
+                    {formatListDate(j.updatedAt)}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 text-zinc-600 dark:text-zinc-400 tabular-nums">
                     {formatDuration(j.createdAt, j.completedAt)}
                   </td>
                   <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
@@ -1048,7 +1188,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                 </tr>
                 {expandedId === j.id && (
                   <tr className="border-b border-zinc-100 bg-zinc-50/50 dark:border-zinc-700/50 dark:bg-zinc-800/30">
-                    <td colSpan={isAdmin ? 10 : 9} className="overflow-visible px-4 py-4">
+                    <td colSpan={isAdmin ? 11 : 10} className="overflow-visible px-4 py-4">
                       <JobDetailsPanel
                         job={jobs.find((row) => row.id === j.id) ?? j}
                         details={detailsCache[j.id]}
