@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { archiveJobOutputHistory } from "@/lib/archive-job-output-history";
 import { startJobWorkflow } from "@/lib/start-job-workflow";
+import { cancelRunwayTaskForJob } from "@/lib/cancel-runway-task-for-job";
 import { deleteJobOutputVideo, deletePendingJobVideo } from "@/lib/s3";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import {
@@ -129,6 +130,8 @@ export async function rerunJob(
 
   const configOverrideValue =
     mode === "retake" ? jobConfigOverrideForDb(options?.configOverride ?? null) : null;
+
+  await cancelRunwayTaskForJob(jobId);
 
   await prisma.job.update({
     where: { id: jobId },

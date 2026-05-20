@@ -20,6 +20,9 @@ export function classifyRunwayTaskError(message: string): string {
   if (isRunwayInsufficientCreditsMessage(message)) {
     return JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS_CODE;
   }
+  if (isRunwayHighLoadMessage(message)) {
+    return JOB_ERROR.RUNWAY_HIGH_LOAD_CODE;
+  }
   return message;
 }
 
@@ -27,6 +30,22 @@ export function classifyRunwayTaskError(message: string): string {
 export function isRunwayInsufficientCreditsError(error: string): boolean {
   if (error === JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS_CODE) return true;
   return isRunwayInsufficientCreditsMessage(error);
+}
+
+/** True when Runway failed the task due to provider overload (retry generation after a wait). */
+export function isRunwayHighLoadError(error: string): boolean {
+  if (error === JOB_ERROR.RUNWAY_HIGH_LOAD_CODE) return true;
+  return isRunwayHighLoadMessage(error);
+}
+
+function isRunwayHighLoadMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("high load") ||
+    lower.includes("try again later") ||
+    /"code"\s*:\s*8\b/.test(message) ||
+    /\bcode["']?\s*[:=]\s*8\b/i.test(message)
+  );
 }
 
 function isRunwayInsufficientCreditsMessage(message: string): boolean {

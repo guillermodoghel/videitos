@@ -54,6 +54,8 @@ type JobOutputHistoryEntry = {
   completedAt: string;
   creditCost: number | null;
   outputVideoUrl: string | null;
+  outputDropboxPath: string | null;
+  canReuploadDropbox: boolean;
 };
 
 type JobDetails = {
@@ -238,11 +240,15 @@ function JobDetailsPanel({
   details,
   onRetake,
   retaking,
+  onReuploadDropbox,
+  reuploadingDropboxKey,
 }: {
   job: JobRow;
   details?: JobDetails | null;
   onRetake?: () => void;
   retaking?: boolean;
+  onReuploadDropbox?: (version: number, useDropboxRetry: boolean) => void;
+  reuploadingDropboxKey?: string | null;
 }) {
   const sourceThumbnail = job.thumbnailUrl;
   const hasInputs =
@@ -445,6 +451,31 @@ function JobDetailsPanel({
                     Video no disponible (archivo no encontrado en almacenamiento).
                   </p>
                 )}
+                {onReuploadDropbox &&
+                  (entry.canReuploadDropbox ||
+                    (entry.isCurrent && job.canRetryDropboxUpload)) && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onReuploadDropbox(
+                        entry.version,
+                        entry.isCurrent && job.canRetryDropboxUpload
+                      )
+                    }
+                    disabled={reuploadingDropboxKey === `${job.id}:${entry.version}`}
+                    className="mt-2 rounded border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200 dark:hover:bg-amber-900/50"
+                    title="Subir de nuevo este video a Dropbox (sin regenerar en Runway)"
+                  >
+                    {reuploadingDropboxKey === `${job.id}:${entry.version}`
+                      ? "Uploading…"
+                      : "Reupload to Dropbox"}
+                  </button>
+                )}
+                {entry.outputDropboxPath && (
+                  <p className="mt-1 break-all font-mono text-[10px] text-zinc-500 dark:text-zinc-400">
+                    {entry.outputDropboxPath}
+                  </p>
+                )}
                 {entry.isCurrent && onRetake && job.status === JOB_STATUS.COMPLETED && (
                   <button
                     type="button"
@@ -599,6 +630,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
   const [detailsLoading, setDetailsLoading] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const [retryingDropboxId, setRetryingDropboxId] = useState<string | null>(null);
+  const [reuploadingDropboxKey, setReuploadingDropboxKey] = useState<string | null>(null);
   const [retakingId, setRetakingId] = useState<string | null>(null);
   const [retakeModalJobId, setRetakeModalJobId] = useState<string | null>(null);
   const [retakePrompt, setRetakePrompt] = useState("");
@@ -938,6 +970,50 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
       alert("Retry upload failed");
     } finally {
       setRetryingDropboxId(null);
+    }
+  }
+
+  async function handleReuploadDropbox(
+    jobId: string,
+    version: number,
+    useDropboxRetry: boolean
+  ) {
+    const key = `${jobId}:${version}`;
+    setReuploadingDropboxKey(key);
+    if (useDropboxRetry) setRetryingDropboxId(jobId);
+    try {
+      const res = await fetch(
+        useDropboxRetry
+          ? `/api/jobs/${jobId}/retry-dropbox-upload`
+          : `/api/jobs/${jobId}/reupload-dropbox`,
+        useDropboxRetry
+          ? { method: "POST", credentials: "include" }
+          : {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ version }),
+            }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error ?? "Reupload to Dropbox failed");
+        return;
+      }
+      setDetailsCache((c) => {
+        const next = { ...c };
+        delete next[jobId];
+        return next;
+      });
+      await fetchJobsFull();
+      if (expandedId === jobId) {
+        void loadJobDetails(jobId);
+      }
+    } catch {
+      alert("Reupload to Dropbox failed");
+    } finally {
+      setReuploadingDropboxKey(null);
+      if (useDropboxRetry) setRetryingDropboxId(null);
     }
   }
 
@@ -1345,6 +1421,10 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                             : undefined
                         }
                         retaking={retakingId === j.id}
+                        onReuploadDropbox={(version, useDropboxRetry) =>
+                          void handleReuploadDropbox(j.id, version, useDropboxRetry)
+                        }
+                        reuploadingDropboxKey={reuploadingDropboxKey}
                       />
                     </td>
                   </tr>

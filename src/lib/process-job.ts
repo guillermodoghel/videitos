@@ -26,7 +26,11 @@ import { maybeAutoRecharge } from "@/lib/stripe";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 import { jobLog, jobLogError } from "@/lib/job-log";
-import { isRunwayInsufficientCreditsError } from "@/lib/runway-errors";
+import {
+  isRunwayHighLoadError,
+  isRunwayInsufficientCreditsError,
+} from "@/lib/runway-errors";
+import { cancelRunwayTaskForJob } from "@/lib/cancel-runway-task-for-job";
 import { JOB_WORKFLOW_PHASE } from "@/lib/constants/job-workflow-phase";
 import { setJobWorkflowPhase } from "@/lib/set-job-workflow-phase";
 
@@ -430,6 +434,9 @@ export async function processJob(
       promptImage = `data:${newMime};base64,${newImageBuf.toString("base64")}`;
     }
     const ratio = config.runwayRatio ?? aspectRatioToRunwayRatio(config.aspectRatio);
+    if (job.providerOperationId) {
+      await cancelRunwayTaskForJob(jobId);
+    }
     await setJobWorkflowPhase(jobId, JOB_WORKFLOW_PHASE.SUBMITTING);
     jobLog("process", "submitting to Runway image-to-video", {
       jobId,
@@ -515,6 +522,12 @@ async function handleRunwayStepError(
     return { ok: false, error: JOB_ERROR.RUNWAY_INSUFFICIENT_CREDITS_CODE };
   }
 
+  if (isRunwayHighLoadError(error)) {
+    jobLog("process", "Runway high load — will retry", { jobId, error });
+    await resetJobForRunwayHighLoadRetry(jobId);
+    return { ok: false, error: JOB_ERROR.RUNWAY_HIGH_LOAD_CODE };
+  }
+
   jobLogError("process", "Runway error (fatal)", { jobId, error: displayError });
   await prisma.job.update({
     where: { id: job.id },
@@ -528,8 +541,30 @@ async function handleRunwayStepError(
   return { ok: false, error: displayError };
 }
 
+/** Reset job after Runway high-load error so process phase can start a new task. */
+export async function resetJobForRunwayHighLoadRetry(jobId: string): Promise<void> {
+  await cancelRunwayTaskForJob(jobId);
+  await prisma.job.update({
+    where: { id: jobId },
+    data: {
+      status: JOB_STATUS.QUEUED,
+      errorMessage: JOB_ERROR.RUNWAY_HIGH_LOAD,
+      workflowPhase: JOB_WORKFLOW_PHASE.WAITING_RUNWAY_HIGH_LOAD,
+      completedAt: null,
+      providerOperationId: null,
+      sentAt: null,
+      rateLimitClaimedAt: null,
+      runwayProgress: null,
+      runwayPollStatus: null,
+      runwayOutputVideoUri: null,
+    },
+  });
+  jobLog("process", "job reset for Runway high-load retry", { jobId });
+}
+
 /** Reset job after Runway credits error during poll so process phase can run again. */
 export async function resetJobForRunwayCreditsRetry(jobId: string): Promise<void> {
+  await cancelRunwayTaskForJob(jobId);
   await prisma.job.update({
     where: { id: jobId },
     data: {

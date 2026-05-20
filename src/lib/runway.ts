@@ -141,6 +141,10 @@ function parseRunwayTaskResponse(data: {
   return { done: false, runwayStatus, progress };
 }
 
+function isRetryableRunwayTaskHttpStatus(status: number): boolean {
+  return status === 429 || status === 502 || status === 503 || status === 504;
+}
+
 async function fetchRunwayTask(
   apiKey: string,
   taskId: string
@@ -169,6 +173,9 @@ export async function getRunwayTaskStatus(
       if (!res.ok) {
         lastHttpStatus = res.status;
         if (attempt === 0) continue;
+        if (isRetryableRunwayTaskHttpStatus(res.status)) {
+          return { done: false, runwayStatus: "UNKNOWN" };
+        }
         return {
           done: true,
           error: `Runway task fetch failed: ${res.status}`,
@@ -194,6 +201,9 @@ export async function getRunwayTaskStatus(
       return parseRunwayTaskResponse(data);
     } catch {
       if (attempt === 0) continue;
+      if (lastHttpStatus != null && isRetryableRunwayTaskHttpStatus(lastHttpStatus)) {
+        return { done: false, runwayStatus: "UNKNOWN" };
+      }
       return {
         done: true,
         error: `Runway task fetch failed${lastHttpStatus != null ? `: ${lastHttpStatus}` : ""}`,
@@ -201,7 +211,7 @@ export async function getRunwayTaskStatus(
     }
   }
 
-  return { done: true, error: "Runway task fetch failed" };
+  return { done: false, runwayStatus: "UNKNOWN" };
 }
 
 /**

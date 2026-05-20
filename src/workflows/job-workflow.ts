@@ -8,11 +8,15 @@ import { sleep } from "workflow";
 import {
   markJobFailedRunwayInsufficientCredits,
   resetJobForRunwayCreditsRetry,
+  resetJobForRunwayHighLoadRetry,
 } from "@/lib/process-job";
 import { jobLog, jobLogError } from "@/lib/job-log";
 import { workflowStepLog } from "@/lib/workflow-step-log";
 import type { WorkflowProcessJobResponse } from "@/lib/workflow-process-job-response";
-import { isRunwayInsufficientCreditsError } from "@/lib/runway-errors";
+import {
+  isRunwayHighLoadError,
+  isRunwayInsufficientCreditsError,
+} from "@/lib/runway-errors";
 import { WEBHOOK_JOB_STATUS } from "@/lib/constants/webhook-job-status";
 import { JOB_ERROR } from "@/lib/constants/job-error-messages";
 import { isJobCanceled } from "@/lib/is-job-canceled";
@@ -21,6 +25,7 @@ import { setJobWorkflowPhase } from "@/lib/set-job-workflow-phase";
 import { prisma } from "@/lib/prisma";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import {
+  RUNWAY_HIGH_LOAD_WORKFLOW_RETRY,
   RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY,
   DROPBOX_UPLOAD_WORKFLOW_RETRY,
   RUNWAY_POLL_WORKFLOW,
@@ -184,6 +189,31 @@ async function resetRunwayCreditsRetry_step(jobId: string): Promise<void> {
   });
   await resetJobForRunwayCreditsRetry(jobId);
   workflowStepLog("reset_runway_credits", "job reset — will re-enter process phase", { jobId });
+}
+
+async function workflowWait_runwayHighLoad_step(
+  jobId: string,
+  attempt: number,
+  sleepSeconds: number
+): Promise<void> {
+  "use step";
+  workflowStepLog("wait_runway_high_load", "entering Runway high-load wait", {
+    jobId,
+    attempt,
+    sleepSeconds,
+    nextPhase: JOB_WORKFLOW_PHASE.WAITING_RUNWAY_HIGH_LOAD,
+  });
+  await setJobWorkflowPhase(jobId, JOB_WORKFLOW_PHASE.WAITING_RUNWAY_HIGH_LOAD);
+  workflowStepLog("wait_runway_high_load", "ready to sleep", { jobId, attempt, sleepSeconds });
+}
+
+async function resetRunwayHighLoadRetry_step(jobId: string): Promise<void> {
+  "use step";
+  workflowStepLog("reset_runway_high_load", "resetting job to retry after Runway high-load error", {
+    jobId,
+  });
+  await resetJobForRunwayHighLoadRetry(jobId);
+  workflowStepLog("reset_runway_high_load", "job reset — will re-enter process phase", { jobId });
 }
 
 async function isJobCompleted_step(jobId: string): Promise<boolean> {
@@ -435,6 +465,7 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
   let operationName: string;
   let processAttempt = 0;
   let runwayCreditsWaitAttempts = 0;
+  let runwayHighLoadWaitAttempts = 0;
 
   main: while (true) {
     if (await stopIfCanceled("main")) return;
@@ -452,6 +483,7 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
           operationName,
           processAttempts: processAttempt,
           runwayCreditsWaitAttempts,
+          runwayHighLoadWaitAttempts,
         });
         break;
       }
@@ -470,6 +502,26 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
           await workflowWait_runwayCredits_step(
             jobId,
             runwayCreditsWaitAttempts,
+            stepResult.retryAfterSeconds
+          );
+        } else if (stepResult.retryReason === "runway_high_load") {
+          runwayHighLoadWaitAttempts += 1;
+          if (runwayHighLoadWaitAttempts >= RUNWAY_HIGH_LOAD_WORKFLOW_RETRY.maxAttempts) {
+            jobLogError("workflow", "Runway high-load retries exhausted", {
+              jobId,
+              attempts: runwayHighLoadWaitAttempts,
+              maxAttempts: RUNWAY_HIGH_LOAD_WORKFLOW_RETRY.maxAttempts,
+            });
+            await webhookJob_step(callbackBaseUrl, {
+              status: WEBHOOK_JOB_STATUS.ERROR,
+              jobId,
+              error: JOB_ERROR.RUNWAY_HIGH_LOAD,
+            });
+            return;
+          }
+          await workflowWait_runwayHighLoad_step(
+            jobId,
+            runwayHighLoadWaitAttempts,
             stepResult.retryAfterSeconds
           );
         } else {
@@ -677,6 +729,42 @@ export async function jobWorkflow(jobId: string, callbackBaseUrl: string): Promi
             sleptSeconds: RUNWAY_INSUFFICIENT_CREDITS_WORKFLOW_RETRY.intervalSeconds,
           });
           if (await stopIfCanceled("runway_credits_poll_sleep")) return;
+          continue main;
+        }
+        if (isRunwayHighLoadError(status.error)) {
+          runwayHighLoadWaitAttempts += 1;
+          if (runwayHighLoadWaitAttempts >= RUNWAY_HIGH_LOAD_WORKFLOW_RETRY.maxAttempts) {
+            jobLogError("workflow", "Runway high-load retries exhausted (poll)", {
+              jobId,
+              attempts: runwayHighLoadWaitAttempts,
+            });
+            await webhookJob_step(callbackBaseUrl, {
+              status: WEBHOOK_JOB_STATUS.ERROR,
+              jobId,
+              operationName,
+              error: JOB_ERROR.RUNWAY_HIGH_LOAD,
+            });
+            return;
+          }
+          jobLog("workflow", "Runway high load on poll — cancel task and retry process", {
+            jobId,
+            operationName,
+            error: status.error,
+            runwayHighLoadWaitAttempts,
+          });
+          await resetRunwayHighLoadRetry_step(jobId);
+          await workflowWait_runwayHighLoad_step(
+            jobId,
+            runwayHighLoadWaitAttempts,
+            RUNWAY_HIGH_LOAD_WORKFLOW_RETRY.intervalSeconds
+          );
+          await sleep(`${RUNWAY_HIGH_LOAD_WORKFLOW_RETRY.intervalSeconds} seconds`);
+          jobLog("workflow", "sleep finished — restarting process after Runway high load", {
+            jobId,
+            runwayHighLoadWaitAttempts,
+            sleptSeconds: RUNWAY_HIGH_LOAD_WORKFLOW_RETRY.intervalSeconds,
+          });
+          if (await stopIfCanceled("runway_high_load_poll_sleep")) return;
           continue main;
         }
         jobLogError("workflow", "poll phase failed", {

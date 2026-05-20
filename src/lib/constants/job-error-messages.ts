@@ -9,6 +9,9 @@ export const JOB_ERROR = {
   /** Runway API org out of credits (402 / billing). */
   RUNWAY_INSUFFICIENT_CREDITS: "Runway account has insufficient credits",
   RUNWAY_INSUFFICIENT_CREDITS_CODE: "runway_insufficient_credits",
+  /** Runway provider overloaded (task failure code 8 / try again later). */
+  RUNWAY_HIGH_LOAD: "Runway is busy — retrying shortly",
+  RUNWAY_HIGH_LOAD_CODE: "runway_high_load",
   NO_RUNWAY_API_KEY: "No Runway API key. Add your key in Settings or ask an admin to add platform key.",
   DROPBOX_NOT_CONNECTED: "Dropbox not connected",
   DROPBOX_UPLOAD_FAILED: "Failed to upload to Dropbox",

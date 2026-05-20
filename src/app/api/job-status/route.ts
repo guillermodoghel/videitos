@@ -119,18 +119,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(status);
   } catch (e) {
     const err = e instanceof Error ? e : new Error(String(e));
-    jobLogError("status", "unexpected error", {
+    jobLogError("status", "unexpected error — will retry on next poll", {
       jobId,
       operationName,
       message: err.message,
       stack: err.stack,
     });
-    return NextResponse.json(
-      {
-        done: true,
-        error: `Status check failed: ${err.message}`,
-      },
-      { status: 200 }
-    );
+    return NextResponse.json({ done: false }, { status: 200 });
   }
 }

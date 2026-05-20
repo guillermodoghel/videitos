@@ -7,6 +7,8 @@ import { JOB_STATUS } from "@/lib/constants/job-status";
 import { resolveJobOutputVideoUrl } from "@/lib/job-output-video-url";
 import { syncDiscoveredOutputsToJobOutput } from "@/lib/sync-discovered-job-outputs";
 import { parseTemplateConfig } from "@/lib/video-models";
+import { hasRecoverableJobVideo } from "@/lib/load-job-video-buffer";
+import { getObjectBody } from "@/lib/s3";
 
 export type JobOutputHistoryEntry = {
   version: number;
@@ -14,6 +16,8 @@ export type JobOutputHistoryEntry = {
   completedAt: string;
   creditCost: number | null;
   outputVideoUrl: string | null;
+  outputDropboxPath: string | null;
+  canReuploadDropbox: boolean;
 };
 
 /**
@@ -92,18 +96,24 @@ export async function GET(
   }
 
   const outputHistory: JobOutputHistoryEntry[] = [];
+  const recoverableCurrentVideo = await hasRecoverableJobVideo(job.id);
 
   for (const archived of archivedOutputs) {
     const url = await resolveJobOutputVideoUrl(job.userId, {
       outputVideoS3Key: archived.outputVideoS3Key,
       outputDropboxPath: archived.outputDropboxPath,
     });
+    const hasS3 =
+      !!archived.outputVideoS3Key &&
+      !!(await getObjectBody(archived.outputVideoS3Key));
     outputHistory.push({
       version: archived.version,
       isCurrent: false,
       completedAt: archived.completedAt.toISOString(),
       creditCost: archived.creditCost != null ? Number(archived.creditCost) : null,
       outputVideoUrl: url,
+      outputDropboxPath: archived.outputDropboxPath,
+      canReuploadDropbox: hasS3 || !!archived.outputDropboxPath || !!url,
     });
   }
 
@@ -118,6 +128,8 @@ export async function GET(
       completedAt: (job.completedAt ?? job.updatedAt).toISOString(),
       creditCost: job.creditCost != null ? Number(job.creditCost) : null,
       outputVideoUrl,
+      outputDropboxPath: job.outputDropboxPath,
+      canReuploadDropbox: !!outputVideoUrl || recoverableCurrentVideo,
     });
   } else if (archivedOutputs.length > 0 || job.status !== JOB_STATUS.COMPLETED) {
     const pendingUrl = await getPresignedUrlIfExists(
@@ -134,6 +146,8 @@ export async function GET(
         completedAt: job.updatedAt.toISOString(),
         creditCost: null,
         outputVideoUrl: pendingUrl,
+        outputDropboxPath: job.outputDropboxPath,
+        canReuploadDropbox: true,
       });
     }
   }
