@@ -46,7 +46,7 @@ Defined in [job-workflow-phase.ts](../src/lib/constants/job-workflow-phase.ts).
 Call sites:
 
 - [dropbox-template-sync.ts](../src/lib/dropbox-template-sync.ts) — new jobs from Dropbox
-- [rerun-job.ts](../src/lib/rerun-job.ts) — retry / retake
+- [rerun-job.ts](../src/lib/rerun-job.ts) — retry / retake (retake accepts optional `{ "prompt": "..." }` on the job for one run without updating the template)
 - [resume-insufficient-credits-jobs.ts](../src/lib/resume-insufficient-credits-jobs.ts) — after credit top-up
 - `POST /api/jobs/start-execution` — batch / legacy trigger (requires `JOB_PROCESS_SECRET`)
 

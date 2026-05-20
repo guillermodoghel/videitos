@@ -5,6 +5,10 @@
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import {
+  applyJobConfigOverride,
+  parseJobConfigOverride,
+} from "@/lib/job-config-override";
 import { parseTemplateConfig, getModelRateLimit, isRunwayImageToVideoModel, RUNWAY_IMAGE_TO_VIDEO_IDS } from "@/lib/video-models";
 import { computeJobCost } from "@/lib/credits";
 import { getObjectBody, isS3Key, uploadPreGenOutputImage } from "@/lib/s3";
@@ -235,7 +239,12 @@ export async function processJob(
     await setJobWorkflowPhase(jobId, JOB_WORKFLOW_PHASE.CLAIMING_SLOT);
   }
 
-  const config = parseTemplateConfig(job.template.model, job.template.config);
+  const templateConfig = parseTemplateConfig(job.template.model, job.template.config);
+  const configOverride = parseJobConfigOverride(job.configOverride);
+  const config = applyJobConfigOverride(templateConfig, configOverride);
+  if (configOverride?.prompt?.trim()) {
+    jobLog("process", "using retake prompt override", { jobId });
+  }
   const isRunway = isRunwayImageToVideoModel(modelId);
 
   if (isRunway) {

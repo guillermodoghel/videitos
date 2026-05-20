@@ -6,6 +6,7 @@ import { USER_ROLE } from "@/lib/constants/user-role";
 import { JOB_STATUS } from "@/lib/constants/job-status";
 import { resolveJobOutputVideoUrl } from "@/lib/job-output-video-url";
 import { syncDiscoveredOutputsToJobOutput } from "@/lib/sync-discovered-job-outputs";
+import { parseTemplateConfig } from "@/lib/video-models";
 
 export type JobOutputHistoryEntry = {
   version: number;
@@ -36,7 +37,9 @@ export async function GET(
       ...(isAdmin ? {} : { userId: sessionUser.id }),
     },
     include: {
-      template: { select: { config: true, dropboxDestinationPath: true } },
+      template: {
+        select: { config: true, dropboxDestinationPath: true, model: true },
+      },
     },
   });
 
@@ -139,10 +142,16 @@ export async function GET(
     (a, b) => new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime()
   );
 
+  const templatePrompt = parseTemplateConfig(
+    job.template.model,
+    job.template.config
+  ).prompt;
+
   return NextResponse.json({
     referenceImageUrls,
     preGenImageUrl,
     outputVideoUrl,
     outputHistory,
+    templatePrompt,
   });
 }

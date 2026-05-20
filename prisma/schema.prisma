@@ -83,6 +83,7 @@ model Job {
   runwayOutputVideoUri  String?   // Runway output URL (ephemeral); kept for Dropbox upload retries
   apiCost               Decimal?  @db.Decimal(14, 4) // API cost (credits) when completed
   creditCost            Decimal?  @db.Decimal(14, 4) // user credit charge when completed
+  configOverride        Json?     // retake-only override, e.g. { "prompt": "..." }
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
   completedAt           DateTime?

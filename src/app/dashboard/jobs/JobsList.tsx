@@ -20,6 +20,7 @@ import {
   JOB_SORT_OPTIONS,
   type JobSortValue,
 } from "@/lib/jobs-list-query";
+import { JOB_PROMPT_MAX_LENGTH } from "@/lib/job-config-override";
 
 type JobRow = {
   id: string;
@@ -60,6 +61,7 @@ type JobDetails = {
   preGenImageUrl: string | null;
   outputVideoUrl: string | null;
   outputHistory: JobOutputHistoryEntry[];
+  templatePrompt?: string;
 };
 
 const LIST_POLL_MS = 10_000;
@@ -465,6 +467,109 @@ function JobDetailsPanel({
   );
 }
 
+function RetakeModal({
+  prompt,
+  onPromptChange,
+  loading,
+  submitting,
+  error,
+  onClose,
+  onConfirm,
+}: {
+  prompt: string;
+  onPromptChange: (value: string) => void;
+  loading: boolean;
+  submitting: boolean;
+  error: string | null;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const trimmed = prompt.trim();
+  const canSubmit = !loading && !submitting && trimmed.length > 0 && trimmed.length <= JOB_PROMPT_MAX_LENGTH;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={(e) => e.target === e.currentTarget && !submitting && onClose()}
+      role="presentation"
+    >
+      <div
+        role="dialog"
+        aria-labelledby="retake-modal-title"
+        className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-6 shadow-xl dark:border-zinc-700 dark:bg-zinc-900"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h2 id="retake-modal-title" className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+            Retake — edit prompt
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="rounded-md p-1 text-zinc-400 hover:text-zinc-600 disabled:opacity-50 dark:hover:text-zinc-200"
+            aria-label="Close"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
+              <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" />
+            </svg>
+          </button>
+        </div>
+
+        <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
+          Regenerar este video con la misma foto. Se cobrarán créditos al completar.
+        </p>
+
+        {loading ? (
+          <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">Loading template prompt…</p>
+        ) : (
+          <>
+            <label htmlFor="retake-prompt" className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              Video prompt
+            </label>
+            <textarea
+              id="retake-prompt"
+              value={prompt}
+              onChange={(e) => onPromptChange(e.target.value)}
+              disabled={submitting}
+              rows={6}
+              className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+            />
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              {trimmed.length}/{JOB_PROMPT_MAX_LENGTH}
+            </p>
+          </>
+        )}
+
+        {error && (
+          <p className="mt-3 text-sm text-red-600 dark:text-red-400" role="alert">
+            {error}
+          </p>
+        )}
+
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={!canSubmit}
+            className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+          >
+            {submitting ? "Retake…" : "Regenerar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [total, setTotal] = useState(0);
@@ -495,6 +600,10 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const [retryingDropboxId, setRetryingDropboxId] = useState<string | null>(null);
   const [retakingId, setRetakingId] = useState<string | null>(null);
+  const [retakeModalJobId, setRetakeModalJobId] = useState<string | null>(null);
+  const [retakePrompt, setRetakePrompt] = useState("");
+  const [retakePromptLoading, setRetakePromptLoading] = useState(false);
+  const [retakeError, setRetakeError] = useState<string | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [selectedForDelete, setSelectedForDelete] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
@@ -742,26 +851,63 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
     }
   }
 
-  async function handleRetake(jobId: string) {
-    if (!confirm("Regenerar este video con la misma foto? Se cobrarán créditos al completar.")) {
+  function closeRetakeModal() {
+    if (retakingId) return;
+    setRetakeModalJobId(null);
+    setRetakePrompt("");
+    setRetakePromptLoading(false);
+    setRetakeError(null);
+  }
+
+  function openRetakeModal(jobId: string) {
+    setRetakeModalJobId(jobId);
+    setRetakeError(null);
+    const cachedPrompt = detailsCache[jobId]?.templatePrompt;
+    if (cachedPrompt !== undefined) {
+      setRetakePrompt(cachedPrompt);
+      setRetakePromptLoading(false);
       return;
     }
+    setRetakePrompt("");
+    setRetakePromptLoading(true);
+    void loadJobDetails(jobId, { showLoading: false }).then((data) => {
+      setRetakePrompt(data?.templatePrompt ?? "");
+      setRetakePromptLoading(false);
+    });
+  }
+
+  async function submitRetake() {
+    if (!retakeModalJobId) return;
+    const jobId = retakeModalJobId;
+    const prompt = retakePrompt.trim();
+    if (!prompt || prompt.length > JOB_PROMPT_MAX_LENGTH) return;
+
     setRetakingId(jobId);
+    setRetakeError(null);
     try {
-      const res = await fetch(`/api/jobs/${jobId}/retake`, { method: "POST", credentials: "include" });
+      const res = await fetch(`/api/jobs/${jobId}/retake`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+      });
       if (res.ok) {
         setDetailsCache((c) => {
           const next = { ...c };
           delete next[jobId];
           return next;
         });
+        setRetakeModalJobId(null);
+        setRetakePrompt("");
+        setRetakePromptLoading(false);
+        setRetakeError(null);
         await fetchJobsFull();
       } else {
         const data = await res.json().catch(() => ({}));
-        alert(data.error ?? "Retake failed");
+        setRetakeError((data.error as string) ?? "Retake failed");
       }
     } catch {
-      alert("Retake failed");
+      setRetakeError("Retake failed");
     } finally {
       setRetakingId(null);
     }
@@ -867,6 +1013,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
   ];
 
   return (
+    <>
     <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
       <div className="space-y-3 border-b border-zinc-200 px-4 py-3 dark:border-zinc-700">
         <div className="flex flex-wrap items-center gap-3">
@@ -1154,7 +1301,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                     {j.status === JOB_STATUS.COMPLETED && (
                       <button
                         type="button"
-                        onClick={() => handleRetake(j.id)}
+                        onClick={() => openRetakeModal(j.id)}
                         disabled={retakingId === j.id}
                         className="rounded border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
                         title="Regenerar video con la misma foto"
@@ -1194,7 +1341,7 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
                         details={detailsCache[j.id]}
                         onRetake={
                           j.status === JOB_STATUS.COMPLETED
-                            ? () => handleRetake(j.id)
+                            ? () => openRetakeModal(j.id)
                             : undefined
                         }
                         retaking={retakingId === j.id}
@@ -1288,5 +1435,17 @@ export function JobsList({ isAdmin = false }: { isAdmin?: boolean }) {
         </div>
       </div>
     </div>
+    {retakeModalJobId && (
+      <RetakeModal
+        prompt={retakePrompt}
+        onPromptChange={setRetakePrompt}
+        loading={retakePromptLoading}
+        submitting={retakingId === retakeModalJobId}
+        error={retakeError}
+        onClose={closeRetakeModal}
+        onConfirm={() => void submitRetake()}
+      />
+    )}
+    </>
   );
 }

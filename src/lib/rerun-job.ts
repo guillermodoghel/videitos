@@ -1,8 +1,13 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { archiveJobOutputHistory } from "@/lib/archive-job-output-history";
 import { startJobWorkflow } from "@/lib/start-job-workflow";
 import { deleteJobOutputVideo, deletePendingJobVideo } from "@/lib/s3";
 import { JOB_STATUS } from "@/lib/constants/job-status";
+import {
+  jobConfigOverrideForDb,
+  type JobConfigOverride,
+} from "@/lib/job-config-override";
 import { jobLog, jobLogError } from "@/lib/job-log";
 
 const HOSTNAME = process.env.HOSTNAME ?? "http://localhost:3000";
@@ -27,6 +32,7 @@ const BASE_RESET = {
   providerOperationId: null,
   sentAt: null,
   rateLimitClaimedAt: null,
+  configOverride: Prisma.DbNull,
 } as const;
 
 const RETAKE_EXTRA_RESET = {
@@ -40,8 +46,17 @@ export type RerunJobResult =
   | { ok: true; jobId: string }
   | { ok: false; error: string; status: number };
 
+export type RerunJobOptions = {
+  /** Retake-only: per-run video prompt override (does not update the template). */
+  configOverride?: JobConfigOverride | null;
+};
+
 /** Reset job and start workflow again (retry failed, or retake completed). */
-export async function rerunJob(jobId: string, mode: RerunMode): Promise<RerunJobResult> {
+export async function rerunJob(
+  jobId: string,
+  mode: RerunMode,
+  options?: RerunJobOptions
+): Promise<RerunJobResult> {
   jobLog("rerun", "requested", { jobId, mode });
 
   const job = await prisma.job.findUnique({
@@ -112,9 +127,22 @@ export async function rerunJob(jobId: string, mode: RerunMode): Promise<RerunJob
     });
   }
 
+  const configOverrideValue =
+    mode === "retake" ? jobConfigOverrideForDb(options?.configOverride ?? null) : null;
+
   await prisma.job.update({
     where: { id: jobId },
-    data: mode === "retake" ? { ...BASE_RESET, ...RETAKE_EXTRA_RESET } : BASE_RESET,
+    data:
+      mode === "retake"
+        ? {
+            ...BASE_RESET,
+            ...RETAKE_EXTRA_RESET,
+            configOverride:
+              configOverrideValue != null
+                ? (configOverrideValue as Prisma.InputJsonValue)
+                : Prisma.DbNull,
+          }
+        : BASE_RESET,
   });
 
   jobLog("rerun", "job reset to queued", {
