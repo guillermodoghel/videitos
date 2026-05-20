@@ -22,7 +22,7 @@ export default async function DashboardLayout({
         />
       )}
       <header className="sticky top-0 z-40 border-b border-zinc-200 bg-white/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:border-zinc-800 dark:bg-zinc-900/95 dark:supports-[backdrop-filter]:dark:bg-zinc-900/80">
-        <div className="mx-auto flex h-14 max-w-4xl items-center justify-between gap-4 px-4">
+        <div className="mx-auto flex h-14 max-w-7xl items-center justify-between gap-4 px-4">
           <nav className="flex items-center gap-1">
             <Link
               href="/dashboard"
@@ -77,7 +77,7 @@ export default async function DashboardLayout({
           />
         </div>
       </header>
-      <main className="mx-auto max-w-4xl px-4 py-8">{children}</main>
+      <main className="mx-auto max-w-7xl px-4 py-8">{children}</main>
     </div>
   );
 }
